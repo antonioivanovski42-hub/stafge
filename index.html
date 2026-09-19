@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#050b12">
+  <title>Northstar | Agency OS</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="auth-root"></div>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">N</div>
+        <div><strong>NORTHSTAR</strong><span>Agency OS</span></div>
+      </div>
+      <div class="workspace-label">WORKSPACE</div>
+      <nav class="nav-list" aria-label="Primary navigation">
+        <button class="nav-item active" data-view="owner"><span class="nav-icon">▦</span> Agency overview</button>
+        <button class="nav-item" data-view="recruits"><span class="nav-icon">＋</span> Recruiting pipeline</button>
+        <button class="nav-item" data-view="agent"><span class="nav-icon">◉</span> Agent view</button>
+        <a class="nav-item nav-external" href="https://crm.empirefinanciallifeagency.com/" target="_blank" rel="noopener noreferrer"><span class="nav-icon">🏢</span> Business CRM<span class="nav-external-icon">↗</span></a>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="side-tip"><span class="tip-dot"></span><div><b>Weekly focus</b><small>Complete your 1:1 prep before Friday.</small></div></div>
+        <div class="user-card"><div class="avatar avatar-blue">MW</div><div><b>Morgan Wells</b><small>Agency owner</small></div><span class="more">•••</span></div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div class="breadcrumb"><span>Workspace</span><b>/</b><strong id="page-title">My success path</strong></div>
+        <div class="top-actions"><button class="icon-button" title="Search">⌕</button><button class="icon-button" title="Notifications">♢<i></i></button><button class="ghost-button logout-button" data-action="logout">Sign out</button><div class="avatar avatar-blue">MW</div></div>
+      </header>
+      <div id="app"></div>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
