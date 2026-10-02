@@ -226,3 +226,14 @@ body.jv-has-objective .command-map:not(:hover):not(:focus-within) { opacity: .8;
 .command-map .stage-node:not(:last-child)::after { top: 14px !important; left: 44px !important; right: 14px !important; }
 .command-map .stage-label, .command-map .stage-status { display: block; padding: 0; margin: 0; text-align: left; }
 .command-map .stage-status { margin-top: 4px; }
+
+/* ───── Stage ready for advancement ───── */
+.stage-ready {
+  display: grid; gap: 6px; margin: 16px 0 4px; padding: 13px 15px;
+  border: 1px solid rgba(61, 225, 255, .55); border-left-width: 3px; background: linear-gradient(90deg, rgba(61, 225, 255, .14), rgba(57, 139, 255, .03));
+  box-shadow: 0 0 30px rgba(61, 225, 255, .2); animation: jv-objective 3.2s ease-in-out infinite;
+}
+.stage-ready b { color: #dffaff; font: 500 10px 'IBM Plex Mono', monospace; letter-spacing: .14em; text-transform: uppercase; }
+.stage-ready > span { color: #bfeaf6; font-size: 13px; line-height: 1.45; }
+.stage-ready .primary-button { justify-self: start; margin-top: 6px; }
+.flag.ready { color: #7be9ff; border-color: rgba(61, 225, 255, .5); box-shadow: 0 0 16px rgba(61, 225, 255, .3); }

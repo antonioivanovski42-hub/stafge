@@ -257,10 +257,11 @@ function serializeBootCamp(agentId) {
 function daysSince(iso) { return Math.max(1, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)); }
 function stageDays(iso) { return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)); }
 function computeProgress(agent, stage, done) {
-  if (stage.threshold) return Math.min(100, Math.round((agent.production / stage.threshold) * 100));
   const requiredTasks = stage.tasks.filter(t => t.required);
   const completed = requiredTasks.filter(t => done.includes(t.id)).length;
-  return Math.round((completed / Math.max(1, requiredTasks.length)) * 100);
+  const total = requiredTasks.length;
+  if (!total) return 0;
+  return Math.min(100, Math.round((completed / total) * 100));
 }
 function computeFlag(agent, stage) {
   const days = stageDays(agent.started);
@@ -283,8 +284,7 @@ function ensureStageAttentionNotifications(agentRows) {
 }
 function readyToAdvance(agent, stage, done) {
   const requiredMet = stage.tasks.filter(t => t.required).every(t => done.includes(t.id));
-  const thresholdMet = !stage.threshold || agent.production >= stage.threshold;
-  return requiredMet && thresholdMet;
+  return requiredMet;
 }
 function serializeAgent(agentRow) {
   const stages = allStages();
@@ -294,8 +294,18 @@ function serializeAgent(agentRow) {
   return {
     id: agentRow.id, name: agentRow.name, email: agentRow.email, initials: agentRow.initials, color: agentRow.color,
     stageId: agentRow.stage_id, stageIndex, stageLabel: stage.label, started: agentRow.started, production: agentRow.production,
-    done, progress: computeProgress(agentRow, stage, done), flag: computeFlag(agentRow, stage), daysInStage: stageDays(agentRow.started), stageHistory: stageHistoryFor(agentRow.id)
+    done, progress: computeProgress(agentRow, stage, done), readyForAdvancement: stageIndex < stages.length - 1 && readyToAdvance(agentRow, stage, done), flag: computeFlag(agentRow, stage), daysInStage: stageDays(agentRow.started), stageHistory: stageHistoryFor(agentRow.id)
   };
+}
+function advanceAgentStage(agentRow, nextStage) {
+  const exitedAt = new Date();
+  const enteredAt = exitedAt.toISOString();
+  const activeHistory = db.prepare('SELECT id, entered_at FROM agent_stage_history WHERE agent_id = ? AND exited_at IS NULL ORDER BY entered_at DESC LIMIT 1').get(agentRow.id);
+  if (activeHistory) db.prepare('UPDATE agent_stage_history SET exited_at = ?, duration_ms = ? WHERE id = ?').run(enteredAt, Math.max(0, exitedAt.getTime() - new Date(activeHistory.entered_at).getTime()), activeHistory.id);
+  db.prepare('UPDATE agents SET stage_id = ?, started = ? WHERE id = ?').run(nextStage.id, enteredAt, agentRow.id);
+  db.prepare('INSERT INTO agent_stage_history (id, agent_id, stage_id, entered_at) VALUES (?,?,?,?)').run(genId('stage-entry'), agentRow.id, nextStage.id, enteredAt);
+  db.prepare("DELETE FROM owner_notifications WHERE type = 'stage-90-days' AND agent_id = ?").run(agentRow.id);
+  db.prepare('DELETE FROM agent_done_tasks WHERE agent_id = ?').run(agentRow.id);
 }
 function initialsFor(name) { return name.trim().split(/\s+/).map(p => p[0]).join('').slice(0, 2).toUpperCase() || 'AG'; }
 
@@ -596,32 +606,33 @@ const server = http.createServer(async (req, res) => {
       const agentRow = db.prepare('SELECT * FROM agents WHERE account_id = ?').get(session.account.id);
       if (!agentRow) return sendJson(res, 404, { error: 'No agent record found.' });
       const taskId = toggleMatch[1];
+      const currentStage = serializeStage(stageRow(agentRow.stage_id));
+      if (!currentStage.tasks.some(task => task.id === taskId)) return sendJson(res, 404, { error: 'That task is not part of your current stage.' });
       const already = db.prepare('SELECT 1 FROM agent_done_tasks WHERE agent_id = ? AND task_id = ?').get(agentRow.id, taskId);
       if (already) db.prepare('DELETE FROM agent_done_tasks WHERE agent_id = ? AND task_id = ?').run(agentRow.id, taskId);
       else db.prepare('INSERT INTO agent_done_tasks (agent_id, task_id) VALUES (?,?)').run(agentRow.id, taskId);
-      const stages = allStages();
-      const stageIndex = stages.findIndex(s => s.id === agentRow.stage_id);
-      const stage = serializeStage(stages[stageIndex]);
-      const done = doneTaskIds(agentRow.id);
-      let rewardNotice = '';
-      if (readyToAdvance(agentRow, stage, done) && stageIndex < stages.length - 1) {
-        const nextStage = stages[stageIndex + 1];
-        const exitedAt = new Date();
-        const enteredAt = exitedAt.toISOString();
-        const activeHistory = db.prepare('SELECT id, entered_at FROM agent_stage_history WHERE agent_id = ? AND exited_at IS NULL ORDER BY entered_at DESC LIMIT 1').get(agentRow.id);
-        if (activeHistory) db.prepare('UPDATE agent_stage_history SET exited_at = ?, duration_ms = ? WHERE id = ?').run(exitedAt.toISOString(), Math.max(0, exitedAt.getTime() - new Date(activeHistory.entered_at).getTime()), activeHistory.id);
-        db.prepare('UPDATE agents SET stage_id = ?, started = ? WHERE id = ?').run(nextStage.id, enteredAt, agentRow.id);
-        db.prepare('INSERT INTO agent_stage_history (id, agent_id, stage_id, entered_at) VALUES (?,?,?,?)').run(genId('stage-entry'), agentRow.id, nextStage.id, enteredAt);
-        db.prepare("DELETE FROM owner_notifications WHERE type = 'stage-90-days' AND agent_id = ?").run(agentRow.id);
-        db.prepare('DELETE FROM agent_done_tasks WHERE agent_id = ?').run(agentRow.id);
-        rewardNotice = stage.reward || '';
-      }
+      // Completing every requirement only marks the stage ready; the owner approves advancement.
+      const rewardNotice = '';
       const refreshedRow = db.prepare('SELECT * FROM agents WHERE id = ?').get(agentRow.id);
       const refreshedStages = allStages();
       const agent = serializeAgent(refreshedRow);
       const newStage = serializeStage(refreshedStages[agent.stageIndex]);
       const nextStage2 = refreshedStages[agent.stageIndex + 1];
       return sendJson(res, 200, { agent, stage: newStage, nextStageLabel: nextStage2 ? nextStage2.label : null, rewardNotice });
+    }
+
+    const advanceMatch = pathname.match(/^\/api\/agents\/([^/]+)\/advance$/);
+    if (advanceMatch && req.method === 'POST') {
+      if (!requireOwner()) return;
+      const agentRow = db.prepare('SELECT * FROM agents WHERE id = ?').get(advanceMatch[1]);
+      if (!agentRow) return sendJson(res, 404, { error: 'Agent not found.' });
+      const stages = allStages();
+      const stageIndex = stages.findIndex(s => s.id === agentRow.stage_id);
+      if (stageIndex < 0 || stageIndex >= stages.length - 1) return sendJson(res, 400, { error: 'This agent is already in the final stage.' });
+      const stage = serializeStage(stages[stageIndex]);
+      if (!readyToAdvance(agentRow, stage, doneTaskIds(agentRow.id))) return sendJson(res, 400, { error: 'This agent has not completed every requirement for the current stage.' });
+      advanceAgentStage(agentRow, stages[stageIndex + 1]);
+      return sendJson(res, 200, { agent: serializeAgent(db.prepare('SELECT * FROM agents WHERE id = ?').get(agentRow.id)) });
     }
 
     // ---- Owner: agent account management ----

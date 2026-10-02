@@ -146,7 +146,7 @@
     intro.id = 'jv-intro';
     intro.innerHTML = `<canvas aria-hidden="true"></canvas>
       <div class="jv-hud" aria-hidden="true"><i></i><i></i><i></i><i></i><span class="jv-scale jv-scale-l"></span><span class="jv-scale jv-scale-r"></span></div>
-      <div class="jv-intro-copy"><h1>WELCOME TO EMPIRE FINANCIAL</h1><button type="button" class="jv-enter"><span>ENTER SYSTEM</span></button></div>`;
+      <div class="jv-intro-copy"><h1>WELCOME TO EMPIRE FINANCIAL</h1><button type="button" class="jv-enter"><span>ENTER</span></button></div>`;
     document.body.append(intro);
     const canvas = intro.querySelector('canvas');
     let ctx, w, h, cx, cy, R;
