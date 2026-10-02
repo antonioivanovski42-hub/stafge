@@ -1,0 +1,13 @@
+{
+  "name": "the-agent-forge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The Agent Forge — agency operating system",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --no-warnings server.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

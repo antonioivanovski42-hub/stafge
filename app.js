@@ -1,61 +1,408 @@
-const stages = [
-  { id:'bootcamp', label:'Boot Camp', short:'Boot camp', description:'Build the habits and skills that make production repeatable.', timeframe:30, reward:'', resources:[], tasks:[['b1','Welcome to Northstar','Watch the orientation and meet your support team.',''],['b2','Values-based sales conversation','Learn the Northstar conversation framework.',''],['b3','Needs analysis workshop','Practice the needs analysis workshop.',''],['b4','Submit first roleplay','Submit one recorded roleplay for feedback.',''],['b5','Build your first 25-name list','Create a first-pass prospect list.','']] },
-  { id:'first15', label:'$0 → $15K', short:'$0 → $15K', description:'Create consistent activity and reach your first $15,000 issue-paid.', timeframe:90, threshold:15000, reward:'', resources:[], tasks:[['p1','Weekly activity rhythm','Establish a weekly activity rhythm.',''],['p2','First field observation','Complete a live field observation with a leader.',''],['p3','Reach $15,000 issue-paid','Production threshold for this stage.','']] },
-  { id:'next30', label:'$15K → $30K', short:'$15K → $30K', description:'Turn momentum into a durable producer practice.', timeframe:120, threshold:30000, reward:'', resources:[], tasks:[['n1','Repeatable referral rhythm','Build a consistent referral practice.',''],['n2','Quarterly business plan','Submit a quarterly business plan.',''],['n3','Reach $30,000 issue-paid','Production threshold for this stage.','']] },
-  { id:'top', label:'$30K+', short:'$30K+', description:'Lead with consistency, craft and influence.', timeframe:180, threshold:30000, reward:'', resources:[], tasks:[['t1','Advanced case design lab','Complete advanced case design training.',''],['t2','Mentor a developing agent','Support one developing agent.',''],['t3','Maintain $30,000+ issue-paid','Production threshold for this stage.','']] },
-  { id:'leadership', label:'Leadership', short:'Leadership', description:'Develop people, culture and a high-performing team.', timeframe:365, reward:'', resources:[], tasks:[['a1','Leadership development plan','Define an individual leadership plan.',''],['a2','Team recruiting goals','Set configurable team recruiting goals.',''],['a3','Leadership foundations','Complete the leadership foundations curriculum.','']] }
-];
-const pipelineStages = [
-  { id:'recruits', label:'Recruits', short:'Recruits', description:'Build a healthy, intentional recruiting pipeline.', timeframe:21, reward:'', resources:[], tasks:[['r1','Initial career conversation','A first conversation has been completed.',''],['r2','Career profile reviewed','Review the candidate profile together.',''],['r3','Licensing path agreed','Confirm the next licensing step.','']] },
-  { id:'license', label:'Licensing', short:'Licensing', description:'Move confidently through the licensing process.', timeframe:45, reward:'', resources:[], tasks:[['l1','Complete pre-licensing education','Finish the approved education requirement.',''],['l2','Pass state licensing exam','Pass the applicable state exam.',''],['l3','Submit carrier appointment','Submit carrier appointment paperwork.','']] }
-];
-const accounts = [{ id:'owner', role:'owner', name:'Morgan Wells', email:'owner@northstar.local', password:'owner-demo' }];
-const agents = [];
-let session = null, view = 'owner', selectedStage = 0, selectedAgent = null, editingTask = null, editingResource = null, showAccountModal = false, rewardNotice = '', selectedPipelineStage = 0, editingPipelineTask = null;
+// The Agent Forge — frontend. All data is fetched from and persisted by the backend API; no local mock database.
+let me = null, data = null, view = 'owner', selectedStage = 0, selectedAgent = null, editingTask = null, showAccountModal = false, accountModalContext = null, showRecruitModal = false, editingRecruit = null, tempPasswordNotice = null, rewardNotice = '', formError = '', needsAdminSetup = false, setupEmail = '', accountSettingsError = '', accountSettingsNotice = '';
 const app = document.querySelector('#app');
 const authRoot = document.querySelector('#auth-root');
-const daysSince = date => Math.max(1, Math.floor((new Date('2026-09-19') - new Date(date)) / 86400000));
-const progress = (agent, stage = stages[agent.stage]) => stage.threshold ? Math.min(100, Math.round(agent.production / stage.threshold * 100)) : Math.round(agent.done.filter(id => stage.tasks.some(task => task[0] === id)).length / Math.max(1, stage.tasks.filter(task => task[4] !== false).length) * 100);
-const flag = agent => daysSince(agent.started) > stages[agent.stage].timeframe * 1.5 ? 'stuck' : daysSince(agent.started) > stages[agent.stage].timeframe ? 'attention' : 'on-track';
+const daysSince = iso => Math.max(1, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000));
+const escapeHtml = value => String(value || '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[character]));
 const avatar = agent => `<span class="avatar avatar-${agent.color || 'blue'}">${agent.initials}</span>`;
-const readyToAdvance = agent => { const stage = stages[agent.stage]; return stage.tasks.filter(task => task[4] !== false).every(task => agent.done.includes(task[0])) && (!stage.threshold || agent.production >= stage.threshold); };
-const escapeHtml = value => String(value || '').replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[character]));
 
-function login() { return `<div class="auth-screen"><div class="auth-card"><div class="brand-mark">N</div><div class="eyebrow">Northstar Agency OS</div><h1>Sign in to your workspace</h1><p>Owner access manages the agency. Agent access is limited to one personal success path.</p><form id="login-form"><label>Email<input name="email" type="email" value="owner@northstar.local" required></label><label>Password<input name="password" type="password" value="owner-demo" required></label><button class="primary-button">Sign in <span>→</span></button><small>Owner demo: owner@northstar.local · owner-demo</small></form><div id="login-error" class="form-error"></div></div></div>`; }
-function path(agent, owner = false) { return `<section class="card path-card"><div class="path-head"><div><div class="eyebrow">${owner ? 'Agency progression' : 'Your progression'}</div><h2>Path to success</h2></div><span class="path-meta">${owner ? 'Click any stage to manage' : 'Overall path progress'} <strong>${owner ? stages.length : Math.round((agent.stage + progress(agent) / 100) / stages.length * 100) + '%'}</strong></span></div><div class="path">${stages.map((stage, index) => { const state = owner ? '' : index < agent.stage ? 'complete' : index === agent.stage ? 'current' : 'locked'; return `<button class="stage-node ${state}" data-stage="${index}"><span class="stage-dot">${owner ? index + 1 : index < agent.stage ? '✓' : index === agent.stage ? '●' : '—'}</span><span class="stage-label">${stage.short}</span><span class="stage-status">${owner ? 'Open' : index < agent.stage ? 'Complete' : index === agent.stage ? 'Current' : 'Locked'}</span></button>`; }).join('')}</div></section>`; }
-function stageStats(index) { const list = agents.filter(agent => agent.stage === index); const average = list.length ? Math.round(list.reduce((sum, agent) => sum + progress(agent, stages[index]), 0) / list.length) : 0; return { list, average, attention: list.filter(agent => flag(agent) !== 'on-track').length }; }
-function owner() { return `<div class="page-heading"><div><div class="eyebrow">Agency owner view</div><h1>Agency progression</h1><p>One operating picture for every agent, stage and next milestone.</p></div><button class="primary-button" data-action="add-agent">＋ Add agent</button></div>${path(null, true)}<section class="section-heading"><div><div class="eyebrow">Stage health</div><h2>Five stages. One clear view.</h2></div><span class="path-meta">${agents.length} agents in motion</span></section><div class="stage-grid">${stages.map((stage, index) => { const stats = stageStats(index); return `<button class="card stage-card ${index === selectedStage ? 'selected' : ''}" data-stage="${index}"><div class="stage-card-top"><span class="stage-index">0${index + 1}</span><span class="status-dot ${stats.attention ? 'warn' : ''}"></span></div><h3>${stage.label}</h3><strong>${stats.list.length} <small>agents</small></strong><div class="progress-row"><span>Average progress</span><b>${stats.average}%</b></div><div class="progress-track"><div class="progress-fill" style="width:${stats.average}%"></div></div><div class="stage-card-foot"><span>${stats.attention ? stats.attention + ' need attention' : 'All on track'}</span><span>Manage →</span></div></button>`; }).join('')}</div>${ownerStage()}${ownerAccounts()}${showAccountModal ? accountModal() : ''}`; }
-function ownerAccounts() { return `<section class="card account-panel"><div class="subhead"><div><div class="eyebrow">Access management</div><h3>Agent accounts</h3></div><span class="path-meta">${agents.length} accounts</span></div>${agents.length ? agents.map(agent => { const account = accounts.find(item => item.id === agent.accountId); return `<div class="account-row">${avatar(agent)}<span><b>${escapeHtml(agent.name)}</b><small>${escapeHtml(account.email)} · ${stages[agent.stage].label}</small></span><button class="row-action" data-reset-agent="${agent.id}">Reset access</button></div>`; }).join('') : '<div class="empty">No agent accounts yet. Create one to begin assigning real agents.</div>'}</section>`; }
-function ownerStage() { const stage = stages[selectedStage], stats = stageStats(selectedStage); return `<section class="owner-detail card"><div class="detail-header"><div><div class="eyebrow">Stage ${String(selectedStage + 1).padStart(2, '0')} · Owner controls</div><h2>${stage.label}</h2><p>${stage.description}</p></div><label class="timeframe">Expected timeframe <input id="timeframe" type="number" value="${stage.timeframe}" min="1"> days</label></div><div class="owner-fields"><label>Stage reward <span class="optional">Optional</span><input id="stage-reward" value="${escapeHtml(stage.reward)}" placeholder="e.g. Private coaching session"></label><label>Stage resource Loom URL <span class="optional">Optional</span><input id="stage-resource" type="url" value="${escapeHtml(stage.resources[0] || '')}" placeholder="https://www.loom.com/share/..."></label><button class="ghost-button" data-action="save-stage-settings">Save stage settings</button></div><div class="owner-detail-grid"><div><div class="subhead"><h3>Requirements & resources</h3><button class="ghost-button" data-action="add-task">＋ Add task</button></div><div class="task-editor">${stage.tasks.map((task, index) => `<div class="task-row"><span class="drag">⋮⋮</span><div class="task-copy"><b>${escapeHtml(task[1])}</b><span>${escapeHtml(task[2])}</span>${task[3] ? '<small>LOOM VIDEO ATTACHED</small>' : ''}</div><span class="required-badge">${task[4] === false ? 'OPTIONAL' : 'REQUIRED'}</span><button class="row-action" data-move="${index}" data-direction="up">↑</button><button class="row-action" data-move="${index}" data-direction="down">↓</button><button class="row-action" data-edit="${index}">Edit</button><button class="row-action danger" data-delete="${index}">×</button></div>`).join('')}</div></div><div><div class="subhead"><h3>Agents in stage</h3><span class="path-meta">${stats.list.length} total</span></div><div class="agent-list">${stats.list.length ? stats.list.map(agent => `<button class="agent-row" data-agent="${agent.id}">${avatar(agent)}<span><b>${escapeHtml(agent.name)}</b><small>${progress(agent, stage)}% complete · ${daysSince(agent.started)} days</small></span><span class="flag ${flag(agent)}">${flag(agent) === 'on-track' ? 'On track' : flag(agent) === 'stuck' ? 'Stuck' : 'Needs attention'}</span></button>`).join('') : '<div class="empty">No agents are currently in this stage.</div>'}</div></div></div>${editingTask !== null ? taskModal(stage, editingTask) : ''}</section>`; }
-function taskModal(stage, index, pipeline = false) { const task = index === -1 ? ['', '', '', '', true] : stage.tasks[index]; const closeAction = pipeline ? 'close-pipeline-modal' : 'close-modal'; return `<div class="modal-backdrop"><form class="modal" id="${pipeline ? 'pipeline-task-form' : 'task-form'}"><button type="button" class="modal-close" data-action="${closeAction}">×</button><div class="eyebrow">Stage requirement</div><h2>${index === -1 ? 'Create task' : 'Edit task'}</h2><label>Task title<input name="title" value="${escapeHtml(task[1])}" required></label><label>Instructions<textarea name="instructions" rows="3">${escapeHtml(task[2])}</textarea></label><label>Loom video URL <span class="optional">Optional</span><input name="loom" type="url" value="${escapeHtml(task[3])}" placeholder="https://www.loom.com/share/..."></label><label class="check-label"><input type="checkbox" name="required" ${task[4] !== false ? 'checked' : ''}> Required to unlock next stage</label><div class="modal-actions"><button type="button" class="ghost-button" data-action="${closeAction}">Cancel</button><button class="primary-button">Save task</button></div></form></div>`; }
-function accountModal() { return `<div class="modal-backdrop"><form class="modal" id="account-form"><button type="button" class="modal-close" data-action="close-account">×</button><div class="eyebrow">Owner control</div><h2>Create agent account</h2><label>Agent name<input name="name" required></label><label>Agent email<input name="email" type="email" required></label><label>Temporary password<input name="password" value="welcome-2026" required></label><label>Assign starting stage<select name="stage">${stages.map((stage, index) => `<option value="${index}">${stage.label}</option>`).join('')}</select></label><div class="modal-actions"><button type="button" class="ghost-button" data-action="close-account">Cancel</button><button class="primary-button">Create account</button></div></form></div>`; }
-function agentView() { const agent = selectedAgent || agents.find(item => item.accountId === session.id); if (!agent) return `<div class="empty-state"><div class="eyebrow">Agent view</div><h1>No agent account selected</h1><p>An owner must create and assign an agent account before this view is available.</p></div>`; const stage = stages[agent.stage], next = stage.tasks.find(task => !agent.done.includes(task[0])); return `<div class="page-heading"><div><div class="eyebrow">Agent view · ${escapeHtml(agent.name)}</div><h1>Your success path</h1><p>Only your progress, tasks and assigned resources are visible in this view.</p></div></div>${path(agent)}<div class="agent-layout"><div><section class="card current-card"><div class="current-kicker"><div class="eyebrow">Where am I? · Stage ${agent.stage + 1} of ${stages.length}</div><span class="status-pill ${flag(agent) !== 'on-track' ? 'attention' : ''}">${flag(agent) === 'on-track' ? 'On track' : flag(agent) === 'stuck' ? 'Stuck' : 'Needs attention'}</span></div><h2>${stage.label}</h2><p class="subline">${stage.description}</p><div class="progress-row"><span>Stage progress</span><b>${progress(agent)}%</b></div><div class="progress-track"><div class="progress-fill" style="width:${progress(agent)}%"></div></div><div class="metrics"><div class="metric"><b>${daysSince(agent.started)} days</b><span>Time in stage</span></div><div class="metric"><b>${stage.threshold ? '$' + agent.production.toLocaleString() : progress(agent) + '%'}</b><span>${stage.threshold ? 'Issue-paid production' : 'Requirements complete'}</span></div><div class="metric"><b>${stage.tasks.filter(task => !agent.done.includes(task[0])).length}</b><span>Steps remaining</span></div></div></section><section class="card requirements-card"><div class="subhead"><h3>What do I need to complete?</h3><span class="path-meta">${agent.done.filter(id => stage.tasks.some(task => task[0] === id)).length} of ${stage.tasks.length}</span></div><div class="req-list">${stage.tasks.map(task => { const done = agent.done.includes(task[0]); return `<div class="req-item ${done ? 'done' : ''}"><button class="check" data-complete="${task[0]}">${done ? '✓' : ''}</button><div><b>${escapeHtml(task[1])}</b><span>${escapeHtml(task[2])}</span>${task[3] ? `<a class="loom-link" href="${escapeHtml(task[3])}" target="_blank">▶ Watch Loom video</a>` : ''}</div></div>`; }).join('')}</div></section></div><aside class="side-stack">${stage.resources[0] ? `<section class="card resources-card"><h3>Stage resource</h3><a class="loom-link" href="${escapeHtml(stage.resources[0])}" target="_blank">▶ Watch assigned Loom resource</a></section>` : ''}<section class="milestone-card"><div class="eyebrow">What unlocks next?</div><h3>${agent.stage < stages.length - 1 ? stages[agent.stage + 1].label : 'Leadership impact'}</h3><p>Complete all required tasks${stage.threshold ? ' and reach the production threshold' : ''} to advance.</p><span class="milestone-action">${next ? 'Next: ' + escapeHtml(next[1]) : stage.reward || 'Finish the checklist'} →</span></section>${stage.reward ? `<section class="reward-card"><div class="eyebrow">Stage reward</div><h3>${escapeHtml(stage.reward)}</h3><p>Earned when this stage is completed.</p></section>` : ''}</aside></div>${rewardNotice ? `<div class="reward-toast">Stage advanced · ${escapeHtml(rewardNotice)}</div>` : ''}`; }
-function pipelineStageDetail() { const stage = pipelineStages[selectedPipelineStage]; return `<section class="owner-detail card"><div class="detail-header"><div><div class="eyebrow">Pipeline ${String(selectedPipelineStage + 1).padStart(2, '0')} · Owner controls</div><h2>${stage.label}</h2><p>${stage.description}</p></div><label class="timeframe">Expected timeframe <input id="pipeline-timeframe" type="number" value="${stage.timeframe}" min="1"> days</label></div><div class="owner-fields"><label>Stage reward <span class="optional">Optional</span><input id="pipeline-reward" value="${escapeHtml(stage.reward)}" placeholder="e.g. Welcome gift"></label><label>Stage resource Loom URL <span class="optional">Optional</span><input id="pipeline-resource" type="url" value="${escapeHtml(stage.resources[0] || '')}" placeholder="https://www.loom.com/share/..."></label><button class="ghost-button" data-action="save-pipeline-settings">Save stage settings</button></div><div class="subhead"><h3>Requirements & resources</h3><button class="ghost-button" data-action="add-pipeline-task">＋ Add task</button></div><div class="task-editor">${stage.tasks.map((task, index) => `<div class="task-row"><span class="drag">⋮⋮</span><div class="task-copy"><b>${escapeHtml(task[1])}</b><span>${escapeHtml(task[2])}</span>${task[3] ? '<small>LOOM VIDEO ATTACHED</small>' : ''}</div><span class="required-badge">${task[4] === false ? 'OPTIONAL' : 'REQUIRED'}</span><button class="row-action" data-pmove="${index}" data-direction="up">↑</button><button class="row-action" data-pmove="${index}" data-direction="down">↓</button><button class="row-action" data-pedit="${index}">Edit</button><button class="row-action danger" data-pdelete="${index}">×</button></div>`).join('')}</div></section>${editingPipelineTask !== null ? taskModal(stage, editingPipelineTask, true) : ''}`; }
-function recruits() { return `<div class="page-heading"><div><div class="eyebrow">Owner only · Pipeline management</div><h1>Recruiting pipeline</h1><p>Keep every conversation moving toward a confident licensing decision, separate from active agent development.</p></div></div><div class="leader-grid"><div class="card stat-card"><span>Total recruits</span><strong>0</strong><small>Add agents from Agency overview</small></div><div class="card stat-card"><span>New this week</span><strong>0</strong><small>Awaiting your first records</small></div></div><section class="section-heading"><div><div class="eyebrow">Pipeline stages</div><h2>Two stages. From first conversation to licensed agent.</h2></div></section><div class="stage-grid">${pipelineStages.map((stage, index) => `<button class="card stage-card ${index === selectedPipelineStage ? 'selected' : ''}" data-pstage="${index}"><div class="stage-card-top"><span class="stage-index">0${index + 1}</span></div><h3>${stage.label}</h3><p class="stage-card-copy">${stage.description}</p><div class="stage-card-foot"><span>${stage.tasks.length} tasks</span><span>Manage →</span></div></button>`).join('')}</div>${pipelineStageDetail()}`; }
-function render() { if (!session) { document.body.classList.add('logged-out'); document.querySelector('.app-shell').style.display = 'none'; authRoot.style.display = 'block'; authRoot.innerHTML = login(); bind(); return; } document.body.classList.remove('logged-out'); authRoot.style.display = 'none'; authRoot.innerHTML = ''; document.querySelector('.app-shell').style.display = 'flex'; document.querySelectorAll('.nav-item[data-view]').forEach(item => { item.style.display = session.role === 'owner' || item.dataset.view === 'agent' ? '' : 'none'; item.classList.toggle('active', item.dataset.view === view || (session.role === 'agent' && item.dataset.view === 'agent')); }); document.querySelector('.user-card').innerHTML = `${avatar({initials:session.name.split(' ').map(part => part[0]).join('').slice(0,2).toUpperCase(),color:'blue'})}<div><b>${escapeHtml(session.name)}</b><small>${session.role === 'owner' ? 'Agency owner' : 'Agent account'}</small></div><span class="more">•••</span>`; app.innerHTML = session.role === 'agent' ? agentView() : view === 'owner' ? owner() : recruits(); document.querySelector('#page-title').textContent = session.role === 'agent' ? 'Agent view' : view === 'owner' ? 'Agency overview' : 'Recruiting pipeline'; bind(); }
-function bind() { const loginForm = document.querySelector('#login-form'); if (loginForm) loginForm.onsubmit = event => { event.preventDefault(); const data = new FormData(loginForm), account = accounts.find(item => item.email === data.get('email') && item.password === data.get('password')); if (!account) { document.querySelector('#login-error').textContent = 'Access denied. Check your email and password.'; return; } session = account; view = account.role === 'agent' ? 'agent' : 'owner'; selectedAgent = agents.find(agent => agent.accountId === account.id) || null; render(); };
-  document.querySelectorAll('[data-action="logout"]').forEach(button => button.onclick = () => { session = null; selectedAgent = null; render(); });
-  document.querySelectorAll('.nav-item[data-view]').forEach(button => button.onclick = () => { if (session.role !== 'owner' && button.dataset.view !== 'agent') return; view = button.dataset.view; render(); });
-  document.querySelectorAll('[data-stage]').forEach(button => button.onclick = () => { if (session.role === 'owner' || Number(button.dataset.stage) <= selectedAgent.stage) { selectedStage = Number(button.dataset.stage); render(); } });
-  document.querySelectorAll('[data-agent]').forEach(button => button.onclick = () => { if (session.role === 'owner') { selectedAgent = agents.find(agent => agent.id === button.dataset.agent); view = 'agent'; render(); } }); document.querySelectorAll('[data-reset-agent]').forEach(button => button.onclick = () => { const account = accounts.find(item => item.id === agents.find(agent => agent.id === button.dataset.resetAgent).accountId); account.password = 'welcome-2026'; rewardNotice = `${account.name}'s temporary password is welcome-2026`; render(); });
-  document.querySelectorAll('[data-complete]').forEach(button => button.onclick = () => { const id = button.dataset.complete; selectedAgent.done = selectedAgent.done.includes(id) ? selectedAgent.done.filter(item => item !== id) : [...selectedAgent.done, id]; if (readyToAdvance(selectedAgent) && selectedAgent.stage < stages.length - 1) { const reward = stages[selectedAgent.stage].reward; selectedAgent.stage += 1; selectedAgent.started = '2026-09-19'; selectedAgent.done = []; rewardNotice = reward; } render(); });
-  document.querySelectorAll('[data-action="add-agent"]').forEach(button => button.onclick = () => { showAccountModal = true; render(); });
-  document.querySelectorAll('[data-action="add-task"]').forEach(button => button.onclick = () => { editingTask = -1; render(); });
-  document.querySelectorAll('[data-edit]').forEach(button => button.onclick = () => { editingTask = Number(button.dataset.edit); render(); });
-  document.querySelectorAll('[data-delete]').forEach(button => button.onclick = () => { stages[selectedStage].tasks.splice(Number(button.dataset.delete), 1); render(); });
-  document.querySelectorAll('[data-move]').forEach(button => button.onclick = () => { const index = Number(button.dataset.move), next = button.dataset.direction === 'up' ? index - 1 : index + 1; if (next >= 0 && next < stages[selectedStage].tasks.length) [stages[selectedStage].tasks[index], stages[selectedStage].tasks[next]] = [stages[selectedStage].tasks[next], stages[selectedStage].tasks[index]]; render(); });
-  document.querySelectorAll('[data-action="close-modal"]').forEach(button => button.onclick = () => { editingTask = null; render(); }); document.querySelectorAll('[data-action="close-account"]').forEach(button => button.onclick = () => { showAccountModal = false; render(); });
-  document.querySelectorAll('[data-pstage]').forEach(button => button.onclick = () => { selectedPipelineStage = Number(button.dataset.pstage); render(); });
-  document.querySelectorAll('[data-action="add-pipeline-task"]').forEach(button => button.onclick = () => { editingPipelineTask = -1; render(); });
-  document.querySelectorAll('[data-pedit]').forEach(button => button.onclick = () => { editingPipelineTask = Number(button.dataset.pedit); render(); });
-  document.querySelectorAll('[data-pdelete]').forEach(button => button.onclick = () => { pipelineStages[selectedPipelineStage].tasks.splice(Number(button.dataset.pdelete), 1); render(); });
-  document.querySelectorAll('[data-pmove]').forEach(button => button.onclick = () => { const index = Number(button.dataset.pmove), next = button.dataset.direction === 'up' ? index - 1 : index + 1; if (next >= 0 && next < pipelineStages[selectedPipelineStage].tasks.length) [pipelineStages[selectedPipelineStage].tasks[index], pipelineStages[selectedPipelineStage].tasks[next]] = [pipelineStages[selectedPipelineStage].tasks[next], pipelineStages[selectedPipelineStage].tasks[index]]; render(); });
-  document.querySelectorAll('[data-action="close-pipeline-modal"]').forEach(button => button.onclick = () => { editingPipelineTask = null; render(); });
-  const pipelineTaskForm = document.querySelector('#pipeline-task-form'); if (pipelineTaskForm) pipelineTaskForm.onsubmit = event => { event.preventDefault(); const data = new FormData(pipelineTaskForm), task = [editingPipelineTask === -1 ? 'task-' + Date.now() : pipelineStages[selectedPipelineStage].tasks[editingPipelineTask][0], data.get('title'), data.get('instructions'), data.get('loom'), data.get('required') === 'on']; if (editingPipelineTask === -1) pipelineStages[selectedPipelineStage].tasks.push(task); else pipelineStages[selectedPipelineStage].tasks[editingPipelineTask] = task; editingPipelineTask = null; render(); };
-  const pipelineTimeframe = document.querySelector('#pipeline-timeframe'); if (pipelineTimeframe) pipelineTimeframe.onchange = () => { pipelineStages[selectedPipelineStage].timeframe = Number(pipelineTimeframe.value) || 1; render(); };
-  const savePipelineSettings = document.querySelector('[data-action="save-pipeline-settings"]'); if (savePipelineSettings) savePipelineSettings.onclick = () => { pipelineStages[selectedPipelineStage].reward = document.querySelector('#pipeline-reward').value; const resource = document.querySelector('#pipeline-resource').value; pipelineStages[selectedPipelineStage].resources = resource ? [resource] : []; render(); };
-  const taskForm = document.querySelector('#task-form'); if (taskForm) taskForm.onsubmit = event => { event.preventDefault(); const data = new FormData(taskForm), task = [editingTask === -1 ? 'task-' + Date.now() : stages[selectedStage].tasks[editingTask][0], data.get('title'), data.get('instructions'), data.get('loom'), data.get('required') === 'on']; if (editingTask === -1) stages[selectedStage].tasks.push(task); else stages[selectedStage].tasks[editingTask] = task; editingTask = null; render(); };
-  const accountForm = document.querySelector('#account-form'); if (accountForm) accountForm.onsubmit = event => { event.preventDefault(); const data = new FormData(accountForm), id = 'agent-' + Date.now(), name = data.get('name'), account = { id, role:'agent', name, email:data.get('email'), password:data.get('password'), accountId:id }; accounts.push(account); agents.push({ id, accountId:id, name, initials:name.split(' ').map(part => part[0]).join('').slice(0,2).toUpperCase(), stage:Number(data.get('stage')), started:'2026-09-19', production:0, done:[], color:'blue' }); showAccountModal = false; render(); };
-  const timeframe = document.querySelector('#timeframe'); if (timeframe) timeframe.onchange = () => { stages[selectedStage].timeframe = Number(timeframe.value) || 1; render(); }; const saveSettings = document.querySelector('[data-action="save-stage-settings"]'); if (saveSettings) saveSettings.onclick = () => { stages[selectedStage].reward = document.querySelector('#stage-reward').value; const resource = document.querySelector('#stage-resource').value; stages[selectedStage].resources = resource ? [resource] : []; render(); };
+async function api(path, options = {}) {
+  const response = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...options });
+  let body = {};
+  try { body = await response.json(); } catch { body = {}; }
+  if (!response.ok) throw new Error(body.error || 'Something went wrong.');
+  return body;
 }
-render();
+async function boot() {
+  try { const bootstrap = await api('/api/bootstrap'); me = bootstrap.user; data = bootstrap; needsAdminSetup = false; render(); return; }
+  catch { me = null; data = null; }
+  try { const status = await api('/api/admin-setup-status'); needsAdminSetup = status.needsSetup; setupEmail = status.needsSetup ? setupEmail : ''; }
+  catch { needsAdminSetup = false; }
+  render();
+}
+async function refreshData() { try { data = await api('/api/bootstrap'); } catch { me = null; data = null; } render(); }
+async function mutate(promiseFactory) {
+  formError = '';
+  try { await promiseFactory(); await refreshData(); }
+  catch (error) { formError = error.message; render(); }
+}
+
+function login() { return `<div class="auth-screen"><div class="auth-card"><div class="brand-mark">F</div><div class="eyebrow">The Agent Forge</div><h1>Sign in to your workspace</h1><p>Owner access manages the agency. Agent access is limited to one personal success path.</p><form id="login-form"><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button class="primary-button">Sign in <span>→</span></button></form><div id="login-error" class="form-error">${escapeHtml(formError)}</div></div></div>`; }
+function adminSetup() { return `<div class="auth-screen"><div class="auth-card"><div class="brand-mark">F</div><div class="eyebrow">The Agent Forge · First-time setup</div><h1>Set up your admin account</h1><p>This account manages the entire agency. Choose a strong password — it is never stored in plain text.</p><form id="admin-setup-form"><label>Admin email<input name="email" type="email" value="antonioivanovski42@gmail.com" readonly></label><label>Create password<input name="password" type="password" minlength="8" required autocomplete="new-password"></label><label>Confirm password<input name="confirmPassword" type="password" minlength="8" required autocomplete="new-password"></label><button class="primary-button">Create admin password <span>→</span></button></form><div id="login-error" class="form-error">${escapeHtml(formError)}</div></div></div>`; }
+
+function pathSection() {
+  const owner = me.role === 'owner';
+  const list = owner ? data.stages : data.timeline;
+  const currentIndex = owner ? -1 : data.agent.stageIndex;
+  const overallPercent = owner ? list.length : Math.round(((currentIndex + (data.agent.progress / 100)) / list.length) * 100);
+  return `<section class="card path-card"><div class="path-head"><div><div class="eyebrow">${owner ? 'Agency progression' : 'Your progression'}</div><h2>Path to success</h2></div><span class="path-meta">${owner ? 'Click any stage to manage' : 'Overall path progress'} <strong>${owner ? overallPercent : overallPercent + '%'}</strong></span></div><div class="path">${list.map((stage, index) => { const state = owner ? '' : index < currentIndex ? 'complete' : index === currentIndex ? 'current' : 'locked'; return `<button class="stage-node ${state}" data-stage="${index}"><span class="stage-dot">${owner ? index + 1 : index < currentIndex ? '✓' : index === currentIndex ? '●' : '—'}</span><span class="stage-label">${stage.short}</span><span class="stage-status">${owner ? 'Open' : index < currentIndex ? 'Complete' : index === currentIndex ? 'Current' : 'Locked'}</span></button>`; }).join('')}</div></section>`;
+}
+
+function stageStats(stageId) { const list = data.agents.filter(agent => agent.stageId === stageId); const average = list.length ? Math.round(list.reduce((sum, agent) => sum + agent.progress, 0) / list.length) : 0; return { list, average, attention: list.filter(agent => agent.flag !== 'on-track').length }; }
+function ownerAlerts() { const notifications = data.notifications || []; return notifications.length ? `<section class="attention-panel"><div class="eyebrow">Owner attention</div>${notifications.map(notification => `<div class="attention-row"><span class="status-dot warn"></span><span><b>${escapeHtml(notification.agent_name)}</b> has been in ${escapeHtml(data.agents.find(agent => agent.id === notification.agent_id)?.stageLabel || 'the current stage')} for 90+ days.</span></div>`).join('')}</section>` : ''; }
+
+function owner() {
+  return `<div class="page-heading"><div><div class="eyebrow">Agency owner view</div><h1>Agency progression</h1><p>One operating picture for every agent, stage and next milestone.</p></div><button class="primary-button" data-action="add-agent">＋ Add agent</button></div>${ownerAlerts()}${pathSection()}<section class="section-heading"><div><div class="eyebrow">Stage health</div><h2>Five stages. One clear view.</h2></div><span class="path-meta">${data.agents.length} agents in motion</span></section><div class="stage-grid">${data.stages.map((stage, index) => { const stats = stageStats(stage.id); return `<button class="card stage-card ${index === selectedStage ? 'selected' : ''}" data-stage="${index}"><div class="stage-card-top"><span class="stage-index">0${index + 1}</span><span class="status-dot ${stats.attention ? 'warn' : ''}"></span></div><h3>${stage.label}</h3><strong>${stats.list.length} <small>agents</small></strong><div class="progress-row"><span>Average progress</span><b>${stats.average}%</b></div><div class="progress-track"><div class="progress-fill" style="width:${stats.average}%"></div></div><div class="stage-card-foot"><span>${stats.attention ? stats.attention + ' need attention' : 'All on track'}</span><span>Manage →</span></div></button>`; }).join('')}</div>${ownerStage()}${ownerAccounts()}${showAccountModal ? accountModal() : ''}`;
+}
+function ownerAccounts() { return `<section class="card account-panel"><div class="subhead"><div><div class="eyebrow">Access management</div><h3>Agent accounts</h3></div><span class="path-meta">${data.agents.length} accounts</span></div>${data.agents.length ? data.agents.map(agent => `<div class="account-row">${avatar(agent)}<span><b>${escapeHtml(agent.name)}</b><small>${escapeHtml(agent.email)} · ${escapeHtml(agent.stageLabel)} · ${agent.daysInStage} days</small></span><button class="row-action" data-view-agent="${agent.id}">View</button><button class="row-action" data-reset-agent="${agent.id}">Reset access</button><button class="row-action danger" data-delete-agent="${agent.id}">Delete agent</button></div>`).join('') : '<div class="empty">No agent accounts yet. Create one to begin assigning real agents.</div>'}</section>`; }
+function ownerStage() {
+  const stage = data.stages[selectedStage], stats = stageStats(stage.id);
+  return `<section class="owner-detail card"><div class="detail-header"><div><div class="eyebrow">Stage ${String(selectedStage + 1).padStart(2, '0')} · Owner controls</div><h2>${stage.label}</h2><p>${stage.description}</p></div><label class="timeframe">Expected timeframe <input id="timeframe" type="number" value="${stage.timeframe}" min="1"> days</label></div><div class="owner-fields"><label>Stage reward <span class="optional">Optional</span><input id="stage-reward" value="${escapeHtml(stage.reward)}" placeholder="e.g. Private coaching session"></label><label>Stage resource Loom URL <span class="optional">Optional</span><input id="stage-resource" type="url" value="${escapeHtml(stage.resources[0] || '')}" placeholder="https://www.loom.com/share/..."></label><button class="ghost-button" data-action="save-stage-settings">Save stage settings</button></div><div class="owner-detail-grid"><div><div class="subhead"><h3>Requirements & resources</h3><button class="ghost-button" data-action="add-task">＋ Add task</button></div><div class="task-editor">${stage.tasks.map((task, index) => `<div class="task-row"><span class="drag">⋮⋮</span><div class="task-copy"><b>${escapeHtml(task.title)}</b><span>${escapeHtml(task.instructions)}</span>${task.loom ? '<small>LOOM VIDEO ATTACHED</small>' : ''}</div><span class="required-badge">${task.required ? 'REQUIRED' : 'OPTIONAL'}</span><button class="row-action" data-move="${task.id}" data-direction="up" ${index === 0 ? 'disabled' : ''}>↑</button><button class="row-action" data-move="${task.id}" data-direction="down" ${index === stage.tasks.length - 1 ? 'disabled' : ''}>↓</button><button class="row-action" data-edit="${task.id}">Edit</button><button class="row-action danger" data-delete="${task.id}">×</button></div>`).join('')}</div></div><div><div class="subhead"><h3>Agents in stage</h3><span class="path-meta">${stats.list.length} total</span></div><div class="agent-list">${stats.list.length ? stats.list.map(agent => `<button class="agent-row" data-view-agent="${agent.id}">${avatar(agent)}<span><b>${escapeHtml(agent.name)}</b><small>${agent.progress}% complete · ${daysSince(agent.started)} days</small></span><span class="flag ${agent.flag}">${agent.flag === 'on-track' ? 'On track' : agent.flag === 'stuck' ? 'Stuck' : 'Needs attention'}</span></button>`).join('') : '<div class="empty">No agents are currently in this stage.</div>'}</div></div></div>${editingTask !== null ? taskModal(stage, editingTask) : ''}</section>`;
+}
+function taskModal(stage, taskId) {
+  const task = taskId === -1 ? { title: '', instructions: '', loom: '', required: true } : stage.tasks.find(t => t.id === taskId);
+  return `<div class="modal-backdrop"><form class="modal" id="task-form"><button type="button" class="modal-close" data-action="close-modal">×</button><div class="eyebrow">Stage requirement</div><h2>${taskId === -1 ? 'Create task' : 'Edit task'}</h2><label>Task title<input name="title" value="${escapeHtml(task.title)}" required></label><label>Instructions<textarea name="instructions" rows="3">${escapeHtml(task.instructions)}</textarea></label><label>Loom video URL <span class="optional">Optional</span><input name="loom" type="url" value="${escapeHtml(task.loom)}" placeholder="https://www.loom.com/share/..."></label><label class="check-label"><input type="checkbox" name="required" ${task.required !== false ? 'checked' : ''}> Required to unlock next stage</label><div class="modal-actions"><button type="button" class="ghost-button" data-action="close-modal">Cancel</button><button class="primary-button">Save task</button></div></form></div>`;
+}
+function accountModal() {
+  const isConvert = accountModalContext && accountModalContext.mode === 'convert';
+  const recruit = isConvert ? data.recruits.find(r => r.id === accountModalContext.recruitId) : null;
+  return `<div class="modal-backdrop"><form class="modal" id="account-form"><button type="button" class="modal-close" data-action="close-account">×</button><div class="eyebrow">Owner control</div><h2>${isConvert ? 'Create agent account for ' + escapeHtml(recruit.name) : 'Create agent account'}</h2><label>Agent name<input name="name" value="${isConvert ? escapeHtml(recruit.name) : ''}" ${isConvert ? 'readonly' : ''} required></label><label>Agent email<input name="email" type="email" value="${isConvert ? escapeHtml(recruit.email) : ''}" required></label><label>Assign starting stage<select name="stage">${data.stages.map((stage, index) => `<option value="${stage.id}">${stage.label}</option>`).join('')}</select></label><p class="optional">A secure temporary password will be generated automatically and shown once you save.</p><div class="modal-actions"><button type="button" class="ghost-button" data-action="close-account">Cancel</button><button class="primary-button">Create account</button></div></form></div>`;
+}
+function tempPasswordModal() { return `<div class="modal-backdrop"><div class="modal"><button type="button" class="modal-close" data-action="close-temp-password">×</button><div class="eyebrow">Account created</div><h2>${escapeHtml(tempPasswordNotice.name)}</h2><p>Share this temporary password securely. It will not be shown again.</p><div class="task-row"><b class="temp-password">${escapeHtml(tempPasswordNotice.tempPassword)}</b></div><div class="modal-actions"><button type="button" class="primary-button" data-action="close-temp-password">Done</button></div></div></div>`; }
+function accountSettings() { return `<div class="page-heading"><div><div class="eyebrow">Owner account</div><h1>Account settings</h1><p>Manage your account details and password.</p></div><button class="ghost-button" data-action="back-to-overview">← Back to overview</button></div><section class="card account-settings-card"><div class="subhead"><div><div class="eyebrow">Account details</div><h2>${escapeHtml(me.name)}</h2></div></div><div class="account-detail"><span>Name</span><b>${escapeHtml(me.name)}</b></div><div class="account-detail"><span>Email</span><b>${escapeHtml(me.email)}</b></div></section><section class="card account-settings-card"><div class="subhead"><div><div class="eyebrow">Security</div><h2>Change password</h2></div></div><form id="change-password-form" class="settings-form"><label>Current password<input name="currentPassword" type="password" required autocomplete="current-password"></label><label>New password<input name="newPassword" type="password" minlength="8" required autocomplete="new-password"></label><label>Confirm new password<input name="confirmPassword" type="password" minlength="8" required autocomplete="new-password"></label><button class="primary-button">Change password</button></form><div class="form-error">${escapeHtml(accountSettingsError)}</div>${accountSettingsNotice ? `<div class="settings-notice">${escapeHtml(accountSettingsNotice)}</div>` : ''}</section>`; }
+
+function agentView(agentData, ownerViewing = false) {
+  const { agent, stage, nextStageLabel } = agentData;
+  const next = stage.tasks.find(task => !agent.done.includes(task.id));
+  const history = agent.stageHistory || [];
+  return `<div class="page-heading"><div><div class="eyebrow">${ownerViewing ? 'Owner view · ' : 'Agent view · '}${escapeHtml(agent.name)}</div><h1>${ownerViewing ? escapeHtml(agent.name) + "'s success path" : 'Your success path'}</h1><p>${ownerViewing ? 'Read-only view of this agent' + String.fromCharCode(8217) + 's progress.' : 'Only your progress, tasks and assigned resources are visible in this view.'}</p></div>${ownerViewing ? '<button class="ghost-button" data-action="back-to-overview">← Back to overview</button>' : ''}</div><section class="card path-card"><div class="path-head"><div><div class="eyebrow">Progression</div><h2>Path to success</h2></div></div><div class="path">${agentData.timeline.map((s, index) => { const state = index < agent.stageIndex ? 'complete' : index === agent.stageIndex ? 'current' : 'locked'; return `<button class="stage-node ${state}" disabled><span class="stage-dot">${index < agent.stageIndex ? '✓' : index === agent.stageIndex ? '●' : '—'}</span><span class="stage-label">${s.short}</span><span class="stage-status">${index < agent.stageIndex ? 'Complete' : index === agent.stageIndex ? 'Current' : 'Locked'}</span></button>`; }).join('')}</div></section><div class="agent-layout"><div><section class="card current-card"><div class="current-kicker"><div class="eyebrow">Where am I? · Stage ${agent.stageIndex + 1} of ${agentData.timeline.length}</div><span class="status-pill ${agent.flag !== 'on-track' ? 'attention' : ''}">${agent.flag === 'on-track' ? 'On track' : agent.flag === 'stuck' ? 'Stuck' : 'Needs attention'}</span></div><h2>${stage.label}</h2><p class="subline">${stage.description}</p><div class="progress-row"><span>Stage progress</span><b>${agent.progress}%</b></div><div class="progress-track"><div class="progress-fill" style="width:${agent.progress}%"></div></div><div class="metrics"><div class="metric"><b>${agent.daysInStage} days</b><span>Time in stage</span></div><div class="metric"><b>${stage.threshold ? '$' + agent.production.toLocaleString() : agent.progress + '%'}</b><span>${stage.threshold ? 'Issue-paid production' : 'Requirements complete'}</span></div><div class="metric"><b>${stage.tasks.filter(task => !agent.done.includes(task.id)).length}</b><span>Steps remaining</span></div></div></section><section class="card requirements-card"><div class="subhead"><h3>What do I need to complete?</h3><span class="path-meta">${agent.done.filter(id => stage.tasks.some(task => task.id === id)).length} of ${stage.tasks.length}</span></div><div class="req-list">${stage.tasks.map(task => { const done = agent.done.includes(task.id); return `<div class="req-item ${done ? 'done' : ''}"><button class="check" ${ownerViewing ? 'disabled' : ''} data-complete="${task.id}">${done ? '✓' : ''}</button><div><b>${escapeHtml(task.title)}</b><span>${escapeHtml(task.instructions)}</span>${task.loom ? `<a class="loom-link" href="${escapeHtml(task.loom)}" target="_blank">▶ Watch Loom video</a>` : ''}</div></div>`; }).join('')}</div></section>${history.length > 1 ? `<section class="card history-card"><div class="subhead"><h3>Stage history</h3><span class="path-meta">${history.length} entries</span></div>${history.slice(0, -1).reverse().map(entry => `<div class="history-row"><span>${escapeHtml(entry.stageLabel)}</span><b>${entry.days} days</b></div>`).join('')}</section>` : ''}</div><aside class="side-stack">${stage.resources[0] ? `<section class="card resources-card"><h3>Stage resource</h3><a class="loom-link" href="${escapeHtml(stage.resources[0])}" target="_blank">▶ Watch assigned Loom resource</a></section>` : ''}<section class="milestone-card"><div class="eyebrow">What unlocks next?</div><h3>${nextStageLabel || 'Leadership impact'}</h3><p>Complete all required tasks${stage.threshold ? ' and reach the production threshold' : ''} to advance.</p><span class="milestone-action">${next ? 'Next: ' + escapeHtml(next.title) : stage.reward || 'Finish the checklist'} →</span></section>${stage.reward ? `<section class="reward-card"><div class="eyebrow">Stage reward</div><h3>${escapeHtml(stage.reward)}</h3><p>Earned when this stage is completed.</p></section>` : ''}</aside></div>${!ownerViewing && rewardNotice ? `<div class="reward-toast">Stage advanced · ${escapeHtml(rewardNotice)}</div>` : ''}`;
+}
+
+function recruitStatusLabel(status) { return status === 'interested' ? 'Interested' : status === 'licensing' ? 'Licensing' : 'Licensed'; }
+function recruitCard(recruit) {
+  const order = ['interested', 'licensing', 'licensed'];
+  const index = order.indexOf(recruit.status);
+  return `<div class="card recruit-card"><div class="recruit-card-top"><b>${escapeHtml(recruit.name)}</b><span class="required-badge">${recruitStatusLabel(recruit.status)}</span></div>${recruit.email ? `<small>${escapeHtml(recruit.email)}</small>` : ''}${recruit.phone ? `<small>${escapeHtml(recruit.phone)}</small>` : ''}${recruit.notes ? `<p class="recruit-notes">${escapeHtml(recruit.notes)}</p>` : ''}<div class="recruit-actions">${index > 0 ? `<button class="row-action" data-recruit-move="${recruit.id}" data-direction="back">← ${recruitStatusLabel(order[index - 1])}</button>` : ''}${index < order.length - 1 ? `<button class="row-action" data-recruit-move="${recruit.id}" data-direction="forward">${recruitStatusLabel(order[index + 1])} →</button>` : ''}<button class="row-action" data-recruit-edit="${recruit.id}">Edit</button><button class="row-action danger" data-recruit-delete="${recruit.id}">×</button>${recruit.status === 'licensed' ? `<button class="primary-button" data-recruit-convert="${recruit.id}">Create agent</button>` : ''}</div></div>`;
+}
+function recruits() {
+  const columns = ['interested', 'licensing', 'licensed'];
+  return `<div class="page-heading"><div><div class="eyebrow">Owner only · Pipeline management</div><h1>Recruiting pipeline</h1><p>Track prospects from first conversation to licensed — separate from active agent development.</p></div><button class="primary-button" data-action="add-recruit">＋ Add prospect</button></div><div class="pipeline-board">${columns.map(status => { const list = data.recruits.filter(r => r.status === status); return `<div class="pipeline-column"><div class="pipeline-column-head"><h3>${recruitStatusLabel(status)}</h3><span class="path-meta">${list.length}</span></div><div class="pipeline-column-body">${list.length ? list.map(recruitCard).join('') : '<div class="empty">No prospects here yet.</div>'}</div></div>`; }).join('')}</div>${showRecruitModal ? recruitModal() : ''}${showAccountModal ? accountModal() : ''}`;
+}
+function recruitModal() {
+  const recruit = editingRecruit ? data.recruits.find(r => r.id === editingRecruit) : { name: '', email: '', phone: '', notes: '' };
+  return `<div class="modal-backdrop"><form class="modal" id="recruit-form"><button type="button" class="modal-close" data-action="close-recruit-modal">×</button><div class="eyebrow">Recruiting pipeline</div><h2>${editingRecruit ? 'Edit prospect' : 'Add prospect'}</h2><label>Name<input name="name" value="${escapeHtml(recruit.name)}" required></label><label>Email <span class="optional">Optional</span><input name="email" type="email" value="${escapeHtml(recruit.email)}"></label><label>Phone <span class="optional">Optional</span><input name="phone" value="${escapeHtml(recruit.phone)}"></label><label>Notes <span class="optional">Optional</span><textarea name="notes" rows="3">${escapeHtml(recruit.notes)}</textarea></label><div class="modal-actions"><button type="button" class="ghost-button" data-action="close-recruit-modal">Cancel</button><button class="primary-button">Save prospect</button></div></form></div>`;
+}
+
+function bootCampProgress(bootcamp) { return bootcamp.totalLessons ? Math.round((bootcamp.completedLessons / bootcamp.totalLessons) * 100) : 0; }
+function videoEmbedUrl(videoUrl) {
+  try {
+    const url = new URL(videoUrl);
+    const host = url.hostname.toLowerCase().replace(/^www\./, '');
+    if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+      const id = url.searchParams.get('v');
+      return id ? `https://www.youtube.com/embed/${encodeURIComponent(id)}` : '';
+    }
+    if (host === 'youtu.be') return `https://www.youtube.com/embed/${encodeURIComponent(url.pathname.slice(1))}`;
+    if (host === 'loom.com') { const id = url.pathname.match(/^\/share\/([^/]+)/)?.[1]; return id ? `https://www.loom.com/embed/${encodeURIComponent(id)}` : ''; }
+    if (host === 'vimeo.com') { const id = url.pathname.match(/^\/(\d+)/)?.[1]; return id ? `https://player.vimeo.com/video/${id}` : ''; }
+  } catch {}
+  return '';
+}
+function bootCampModule(module, ownerViewing = false) {
+  const state = module.complete ? 'complete' : module.unlocked ? 'current' : 'locked';
+  const moduleControls = ownerViewing ? `<form class="bootcamp-module-form" data-bootcamp-module-form="${module.id}"><input name="title" value="${escapeHtml(module.title)}" required><input name="description" value="${escapeHtml(module.description)}" placeholder="Module description"><button class="row-action">Save module</button><button class="row-action danger" type="button" data-bootcamp-delete-module="${module.id}">Delete</button><button class="row-action" type="button" data-bootcamp-move-module="${module.id}" data-direction="up">↑</button><button class="row-action" type="button" data-bootcamp-move-module="${module.id}" data-direction="down">↓</button></form>` : '';
+  const lessons = module.lessons.map((lesson, index) => { const embedUrl = videoEmbedUrl(lesson.videoUrl); const resourceBlocked = lesson.resourceRequired && !lesson.resourceCompleted; const contractBlocked = lesson.contractRequired && !lesson.contractCompleted; return `<div class="bootcamp-lesson ${lesson.done ? 'done' : ''}"><button class="check" ${ownerViewing || !module.unlocked || (lesson.videoUrl && !lesson.watched) || resourceBlocked || contractBlocked ? 'disabled' : ''} data-bootcamp-complete="${lesson.id}">${lesson.done ? '✓' : ''}</button><div class="bootcamp-lesson-content"><b>${escapeHtml(lesson.title)}</b><span>${escapeHtml(lesson.instructions)}</span>${lesson.videoUrl ? `<div class="bootcamp-video">${embedUrl ? `<iframe src="${embedUrl}" title="${escapeHtml(lesson.title)} video" loading="lazy" allow="autoplay; fullscreen" allowfullscreen></iframe>` : `<a class="loom-link" href="${escapeHtml(lesson.videoUrl)}" target="_blank" rel="noopener">Open video</a>`}${!ownerViewing && module.unlocked ? lesson.watched ? '<span class="video-watched">Video watched</span>' : '<button class="row-action" data-bootcamp-watch="' + lesson.id + '">Mark video watched</button>' : ''}</div>` : ''}${lesson.resourceUrl ? `<div class="bootcamp-resource"><a class="loom-link" href="${escapeHtml(lesson.resourceUrl)}" target="_blank" rel="noopener">Open resource</a>${!ownerViewing && module.unlocked ? lesson.resourceCompleted ? '<span class="resource-complete">Resource completed</span>' : '<button class="row-action" data-bootcamp-resource="' + lesson.id + '">Mark resource complete</button>' : ''}</div>` : ''}${lesson.contractUrl ? `<div class="bootcamp-resource"><a class="loom-link" href="${escapeHtml(lesson.contractUrl)}" target="_blank" rel="noopener">Open contract/signature</a>${!ownerViewing && module.unlocked ? lesson.contractCompleted ? '<span class="resource-complete">Contract completed</span>' : '<button class="row-action" data-bootcamp-contract="' + lesson.id + '">Mark contract complete</button>' : ''}</div>` : ''}${ownerViewing ? `<form class="bootcamp-video-form" data-bootcamp-lesson-form="${lesson.id}"><input name="title" value="${escapeHtml(lesson.title)}" required><input name="description" value="${escapeHtml(lesson.instructions)}" placeholder="Description"><input name="videoUrl" type="url" value="${escapeHtml(lesson.videoUrl || '')}" placeholder="Optional video URL"><input name="resourceUrl" type="url" value="${escapeHtml(lesson.resourceUrl || '')}" placeholder="Optional document/resource URL"><input name="contractUrl" type="url" value="${escapeHtml(lesson.contractUrl || '')}" placeholder="Optional contract/signature URL"><label class="check-label"><input name="required" type="checkbox" ${lesson.required ? 'checked' : ''}> Required lesson</label><label class="check-label"><input name="resourceRequired" type="checkbox" ${lesson.resourceRequired ? 'checked' : ''}> Required resource</label><label class="check-label"><input name="contractRequired" type="checkbox" ${lesson.contractRequired ? 'checked' : ''}> Required contract</label><button class="row-action">Save lesson</button><button class="row-action danger" type="button" data-bootcamp-delete-lesson="${lesson.id}">Delete</button><button class="row-action" type="button" data-bootcamp-move-lesson="${lesson.id}" data-direction="up" ${index === 0 ? 'disabled' : ''}>↑</button><button class="row-action" type="button" data-bootcamp-move-lesson="${lesson.id}" data-direction="down" ${index === module.lessons.length - 1 ? 'disabled' : ''}>↓</button></form>` : ''}</div></div>`; }).join('');
+  return `<section class="card bootcamp-module ${state}"><div class="bootcamp-module-head"><div><span class="stage-index">0${module.idx + 1}</span><h2>${escapeHtml(module.title)}</h2><p>${escapeHtml(module.description)}</p></div><span class="status-pill ${state === 'complete' ? '' : state === 'locked' ? 'locked' : 'attention'}">${module.complete ? 'Completed' : module.unlocked ? 'Current' : 'Locked'}</span></div>${moduleControls}<div class="bootcamp-lessons">${lessons}</div>${ownerViewing ? `<form class="bootcamp-add-form" data-bootcamp-add-lesson="${module.id}"><input name="title" placeholder="Add custom lesson" required><button class="primary-button">Add lesson</button></form>` : ''}</section>`;
+}
+function bootCamp() {
+  const owner = me.role === 'owner';
+  const bootcamp = data.bootcamp;
+  const progress = owner ? null : bootCampProgress(bootcamp);
+  const agents = owner ? bootcamp.agents : [];
+  return `<div class="page-heading"><div><div class="eyebrow">Structured onboarding</div><h1>Boot Camp</h1><p>${owner ? 'See every agent\'s course progress and module status.' : 'Complete each requirement in order. The next module unlocks when the current one is complete.'}</p></div>${!owner ? `<span class="bootcamp-total">${progress}% complete</span>` : ''}</div>${owner ? `<section class="card bootcamp-owner-list"><div class="subhead"><h2>Agent progress</h2><span class="path-meta">${agents.length} agents</span></div>${agents.length ? agents.map(agent => `<div class="bootcamp-agent-row"><div><b>${escapeHtml(agent.name)}</b><small>${agent.bootcamp.completedLessons} of ${agent.bootcamp.totalLessons} requirements complete</small></div><strong>${bootCampProgress(agent.bootcamp)}%</strong><div class="progress-track"><div class="progress-fill" style="width:${bootCampProgress(agent.bootcamp)}%"></div></div></div>`).join('') : '<div class="empty">No agent accounts yet.</div>'}</section><div class="section-heading"><div><div class="eyebrow">Course builder</div><h2>Manage modules and lessons</h2></div></div><form class="card bootcamp-add-module" data-bootcamp-add-module><input name="title" placeholder="New module title" required><input name="description" placeholder="Module description"><button class="primary-button">Add module</button></form>${bootcamp.modules.map(module => bootCampModule(module, true)).join('')}` : `<section class="card bootcamp-progress-card"><div class="progress-row"><span>Overall Boot Camp progress</span><b>${progress}%</b></div><div class="progress-track"><div class="progress-fill" style="width:${progress}%"></div></div><span class="path-meta">${bootcamp.completedLessons} of ${bootcamp.totalLessons} requirements complete</span></section>${bootcamp.modules.map(module => bootCampModule(module)).join('')}`}`;
+}
+
+function createForgeCore(progressValue, label) {
+  const progress = Math.max(0, Math.min(100, Number(progressValue) || 0));
+  const core = document.createElement('div');
+  core.className = 'forge-core';
+  core.setAttribute('role', 'img');
+  core.setAttribute('aria-label', `Forge Core: ${progress}% progress. ${label}`);
+  core.style.setProperty('--core-progress', `${progress}%`);
+  for (const orbitName of ['forge-orbit-a', 'forge-orbit-b', 'forge-orbit-c']) {
+    const orbit = document.createElement('span');
+    orbit.className = `forge-core-orbit ${orbitName}`;
+    core.append(orbit);
+  }
+  const scan = document.createElement('span');
+  scan.className = 'forge-core-scan';
+  core.append(scan);
+  const readout = document.createElement('span');
+  readout.className = 'forge-core-readout';
+  readout.textContent = String(progress);
+  const unit = document.createElement('small');
+  unit.textContent = '%';
+  readout.append(unit);
+  core.append(readout);
+  const coreBadge = document.createElement('span');
+  coreBadge.className = 'forge-core-label';
+  coreBadge.textContent = 'FORGE CORE';
+  core.append(coreBadge);
+  return core;
+}
+
+function addForgeCore(agent) {
+  const card = document.querySelector('.current-card');
+  if (!card || !agent) return;
+  const core = createForgeCore(agent.progress, `${agent.stageLabel || 'Current stage'} progression`);
+  card.prepend(core);
+}
+
+function addMissionContinue(agent) {
+  addForgeCore(agent);
+  const requirement = document.querySelector('.req-item:not(.done)');
+  const milestone = document.querySelector('.milestone-card');
+  requirement?.classList.add('current-objective');
+  if (!requirement || !milestone) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'primary-button mission-continue';
+  button.textContent = 'Continue mission';
+  button.setAttribute('aria-label', `Continue with ${requirement.querySelector('b')?.textContent || 'the next task'}`);
+  button.addEventListener('click', () => {
+    requirement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    requirement.querySelector('.check')?.focus({ preventScroll: true });
+  });
+  milestone.append(button);
+}
+
+function composeAgentCommand() {
+  const heading = app.querySelector(':scope > .page-heading');
+  const path = app.querySelector(':scope > .path-card');
+  const layout = app.querySelector(':scope > .agent-layout');
+  if (!heading || !path || !layout) return;
+  const leftColumn = layout.querySelector(':scope > div');
+  const sideStack = layout.querySelector(':scope > .side-stack');
+  const current = layout.querySelector('.current-card');
+  const requirements = layout.querySelector('.requirements-card');
+  const history = layout.querySelector('.history-card');
+  const milestone = layout.querySelector('.milestone-card');
+  const resources = layout.querySelector('.resources-card');
+  const reward = layout.querySelector('.reward-card');
+  const core = layout.querySelector('.forge-core');
+  if (!current || !requirements || !sideStack || !milestone) return;
+
+  const screen = document.createElement('div');
+  screen.className = 'agent-command-screen';
+  const mapLabel = document.createElement('div');
+  mapLabel.className = 'command-section-label';
+  mapLabel.textContent = 'CAREER VECTOR / LIVE';
+  path.classList.remove('card');
+  path.classList.add('command-map');
+  path.prepend(mapLabel);
+
+  const commandLayout = document.createElement('div');
+  commandLayout.className = 'agent-command-layout';
+  const missionRail = document.createElement('section');
+  missionRail.className = 'command-mission-rail';
+  const coreWell = document.createElement('section');
+  coreWell.className = 'forge-core-well';
+  coreWell.setAttribute('aria-label', 'Career progression core');
+  const nextRail = document.createElement('aside');
+  nextRail.className = 'command-next-rail';
+  if (leftColumn) {
+    leftColumn.removeChild(current);
+    leftColumn.removeChild(requirements);
+    if (history) leftColumn.removeChild(history);
+  }
+  current.classList.remove('card');
+  requirements.classList.remove('card');
+  milestone.classList.remove('card');
+  resources?.classList.remove('card');
+  history?.classList.remove('card');
+  reward?.classList.remove('card');
+  current.classList.add('mission-readout');
+  requirements.classList.add('mission-list');
+  missionRail.append(current, requirements);
+  if (history) missionRail.append(history);
+  if (core) coreWell.append(core);
+  const coreReadout = document.createElement('div');
+  coreReadout.className = 'core-caption';
+  coreReadout.innerHTML = '<span>FORGE CORE</span><small>CAREER SIGNAL / ACTIVE</small>';
+  coreWell.append(coreReadout);
+  nextRail.append(milestone);
+  if (resources) nextRail.append(resources);
+  if (reward) nextRail.append(reward);
+  layout.replaceWith(commandLayout);
+  commandLayout.append(missionRail, coreWell, nextRail);
+  screen.append(heading, path, commandLayout);
+  app.prepend(screen);
+}
+
+function composeOwnerCommand() {
+  const heading = app.querySelector(':scope > .page-heading');
+  const path = app.querySelector(':scope > .path-card');
+  const alerts = app.querySelector(':scope > .attention-panel');
+  const sectionHeading = app.querySelector(':scope > .section-heading');
+  const stageGrid = app.querySelector(':scope > .stage-grid');
+  const detail = app.querySelector(':scope > .owner-detail');
+  const accounts = app.querySelector(':scope > .account-panel');
+  if (!heading || !path || !stageGrid || !detail || !accounts) return;
+  const screen = document.createElement('div');
+  screen.className = 'owner-command-screen';
+  path.classList.remove('card');
+  path.classList.add('command-map');
+  detail.classList.remove('card');
+  accounts.classList.remove('card');
+  stageGrid.querySelectorAll('.stage-card').forEach(stage => stage.classList.remove('card'));
+  const operations = document.createElement('div');
+  operations.className = 'owner-command-grid';
+  const stageRail = document.createElement('section');
+  stageRail.className = 'owner-stage-rail';
+  const detailRail = document.createElement('section');
+  detailRail.className = 'owner-detail-rail';
+  const coreField = document.createElement('section');
+  coreField.className = 'owner-core-field';
+  const selected = data.stages[selectedStage] || data.stages[0];
+  const stats = stageStats(selected.id);
+  const core = createForgeCore(stats.average, `${selected.label} average progress`);
+  coreField.setAttribute('aria-label', `Agency Forge Core. ${stats.list.length} agents in ${selected.label}`);
+  const coreHeading = document.createElement('div');
+  coreHeading.className = 'owner-core-heading';
+  const coreLabel = document.createElement('span');
+  coreLabel.textContent = 'AGENCY CORE / STAGE SYNC';
+  const coreStage = document.createElement('strong');
+  coreStage.textContent = selected.label;
+  coreHeading.append(coreLabel, coreStage);
+  const coreSignals = document.createElement('div');
+  coreSignals.className = 'owner-core-signals';
+  for (const [signalName, signalValue] of [['AGENTS', stats.list.length], ['STAGE AVG', `${stats.average}%`], ['ATTENTION', stats.attention]]) {
+    const signal = document.createElement('div');
+    signal.className = 'owner-core-signal';
+    const value = document.createElement('b');
+    value.textContent = String(signalValue);
+    const label = document.createElement('span');
+    label.textContent = signalName;
+    signal.append(value, label);
+    coreSignals.append(signal);
+  }
+  coreField.append(coreHeading, core, coreSignals);
+  const accountRail = document.createElement('section');
+  accountRail.className = 'owner-account-rail';
+  if (sectionHeading) stageRail.append(sectionHeading);
+  stageRail.append(stageGrid);
+  detailRail.append(detail);
+  accountRail.append(accounts);
+  operations.append(stageRail, coreField, detailRail);
+  screen.append(heading);
+  if (alerts) screen.append(alerts);
+  screen.append(path, operations, accountRail);
+  app.prepend(screen);
+}
+
+function composeBootCampCommand() {
+  const heading = app.querySelector(':scope > .page-heading');
+  if (!heading) return;
+  const screen = document.createElement('div');
+  screen.className = 'training-command-screen';
+  const progress = app.querySelector(':scope > .bootcamp-progress-card');
+  const ownerProgress = app.querySelector(':scope > .bootcamp-owner-list');
+  const builderHeading = app.querySelector(':scope > .section-heading');
+  const moduleForm = app.querySelector(':scope > .bootcamp-add-module');
+  const modules = [...app.querySelectorAll(':scope > .bootcamp-module')];
+  const moduleList = document.createElement('div');
+  moduleList.className = 'training-pathway';
+  modules.forEach((module, index) => {
+    module.classList.remove('card');
+    module.style.setProperty('--module-index', index + 1);
+    moduleList.append(module);
+  });
+  progress?.classList.remove('card');
+  ownerProgress?.classList.remove('card');
+  moduleForm?.classList.remove('card');
+  screen.append(heading);
+  if (progress) screen.append(progress);
+  if (ownerProgress) screen.append(ownerProgress);
+  if (builderHeading) screen.append(builderHeading);
+  if (moduleForm) screen.append(moduleForm);
+  screen.append(moduleList);
+  app.prepend(screen);
+}
+
+function composeUtilityScreen() {
+  if (view === 'recruits') {
+    app.querySelectorAll('.recruit-card').forEach(card => card.classList.remove('card'));
+  }
+  if (view === 'settings') {
+    app.querySelectorAll('.account-settings-card').forEach(panel => panel.classList.remove('card'));
+  }
+}
+
+function render() {
+  if (!me) { document.body.classList.add('logged-out'); document.querySelector('.app-shell').style.display = 'none'; authRoot.style.display = 'block'; authRoot.innerHTML = needsAdminSetup ? adminSetup() : login(); bind(); return; }
+  if (me.role === 'agent' && view === 'owner') view = 'agent';
+  document.body.classList.remove('logged-out'); authRoot.style.display = 'none'; authRoot.innerHTML = ''; document.querySelector('.app-shell').style.display = 'flex';
+  document.querySelectorAll('.nav-item[data-view]').forEach(item => { item.style.display = me.role === 'owner' || item.dataset.view === 'agent' || item.dataset.view === 'bootcamp' ? '' : 'none'; item.classList.toggle('active', item.dataset.view === view || (me.role === 'agent' && view === 'agent' && item.dataset.view === 'agent')); });
+  document.querySelector('.user-card').innerHTML = `${avatar({ initials: me.name.split(' ').map(part => part[0]).join('').slice(0, 2).toUpperCase(), color: 'blue' })}<div><b>${escapeHtml(me.name)}</b><small>${me.role === 'owner' ? 'Agency owner' : 'Agent account'}</small></div><span class="more">•••</span>`;
+  let pageTitle = 'Agency overview', content = '';
+  if (view === 'bootcamp') { pageTitle = 'Boot Camp'; content = bootCamp(); }
+  else if (me.role === 'agent') { pageTitle = 'Agent view'; content = data.agent ? agentView(data) : '<div class="empty-state"><h1>No agent record found.</h1><p>Contact your agency owner.</p></div>'; }
+  else if (view === 'agent-detail' && selectedAgent) { pageTitle = 'Agent detail'; const agentRow = data.agents.find(a => a.id === selectedAgent); const stage = agentRow ? data.stages.find(s => s.id === agentRow.stageId) : null; const idx = agentRow ? data.stages.findIndex(s => s.id === agentRow.stageId) : -1; const next = idx >= 0 ? data.stages[idx + 1] : null; content = agentRow ? agentView({ agent: agentRow, stage, timeline: data.stages, nextStageLabel: next ? next.label : null }, true) : ''; }
+  else if (view === 'settings') { pageTitle = 'Account settings'; content = accountSettings(); }
+  else if (view === 'recruits') { pageTitle = 'Recruiting pipeline'; content = recruits(); }
+  else { pageTitle = 'Agency overview'; content = owner(); }
+  app.innerHTML = content + (tempPasswordNotice ? tempPasswordModal() : '');
+  if (view === 'agent' && me.role === 'agent') { addMissionContinue(data.agent); composeAgentCommand(); }
+  else if (view === 'agent-detail' && me.role === 'owner' && selectedAgent) { const viewedAgent = data.agents.find(agent => agent.id === selectedAgent); if (viewedAgent) addForgeCore(viewedAgent); composeAgentCommand(); }
+  else if (view === 'owner' && me.role === 'owner') composeOwnerCommand();
+  else if (view === 'bootcamp') { if (me.role === 'agent') document.querySelector('.bootcamp-module.current .bootcamp-lesson:not(.done)')?.classList.add('current-objective'); composeBootCampCommand(); }
+  else composeUtilityScreen();
+  document.querySelector('#page-title').textContent = pageTitle;
+  bind();
+}
+
+function bind() {
+  const loginForm = document.querySelector('#login-form');
+  if (loginForm) loginForm.onsubmit = async event => { event.preventDefault(); const data2 = new FormData(loginForm); try { await api('/api/login', { method: 'POST', body: JSON.stringify({ email: data2.get('email'), password: data2.get('password') }) }); formError = ''; await boot(); } catch (error) { formError = error.message; render(); } };
+  const adminSetupForm = document.querySelector('#admin-setup-form');
+  if (adminSetupForm) adminSetupForm.onsubmit = async event => { event.preventDefault(); const data2 = new FormData(adminSetupForm); try { await api('/api/admin-setup', { method: 'POST', body: JSON.stringify({ email: data2.get('email'), password: data2.get('password'), confirmPassword: data2.get('confirmPassword') }) }); formError = ''; await boot(); } catch (error) { formError = error.message; render(); } };
+  document.querySelectorAll('[data-action="logout"]').forEach(button => button.onclick = async () => { await api('/api/logout', { method: 'POST' }).catch(() => {}); me = null; data = null; view = 'owner'; selectedAgent = null; render(); });
+  const userCard = document.querySelector('.user-card');
+  if (userCard && me && me.role === 'owner') userCard.onclick = () => { view = 'settings'; accountSettingsError = ''; accountSettingsNotice = ''; render(); };
+  document.querySelectorAll('.nav-item[data-view]').forEach(button => button.onclick = () => { if (me.role !== 'owner' && !['agent', 'bootcamp'].includes(button.dataset.view)) return; view = button.dataset.view; selectedAgent = null; render(); });
+  document.querySelectorAll('[data-stage]').forEach(button => button.onclick = () => { if (me.role === 'owner') { selectedStage = Number(button.dataset.stage); render(); } });
+  document.querySelectorAll('[data-view-agent]').forEach(button => button.onclick = () => { selectedAgent = button.dataset.viewAgent; view = 'agent-detail'; render(); });
+  document.querySelectorAll('[data-reset-agent]').forEach(button => button.onclick = () => mutate(async () => { const result = await api(`/api/agents/${button.dataset.resetAgent}/reset-password`, { method: 'POST' }); const agentRow = data.agents.find(a => a.id === button.dataset.resetAgent); tempPasswordNotice = { name: agentRow.name, tempPassword: result.tempPassword }; }));
+  document.querySelectorAll('[data-delete-agent]').forEach(button => button.onclick = () => { const agent = data.agents.find(item => item.id === button.dataset.deleteAgent); if (agent && window.confirm(`Delete ${agent.name}'s account and all progression data? This cannot be undone.`)) mutate(() => api(`/api/agents/${agent.id}`, { method: 'DELETE' })); });
+  document.querySelectorAll('[data-complete]').forEach(button => button.onclick = () => mutate(async () => { const result = await api(`/api/me/tasks/${button.dataset.complete}/toggle`, { method: 'POST' }); rewardNotice = result.rewardNotice || ''; }));
+  document.querySelectorAll('[data-bootcamp-complete]').forEach(button => button.onclick = () => mutate(async () => { const result = await api(`/api/me/bootcamp/lessons/${button.dataset.bootcampComplete}/toggle`, { method: 'POST' }); data.bootcamp = result.bootcamp; }));
+  document.querySelectorAll('[data-bootcamp-watch]').forEach(button => button.onclick = () => mutate(async () => { const result = await api(`/api/me/bootcamp/lessons/${button.dataset.bootcampWatch}/watch`, { method: 'POST' }); data.bootcamp = result.bootcamp; }));
+  document.querySelectorAll('[data-bootcamp-resource]').forEach(button => button.onclick = () => mutate(async () => { const result = await api(`/api/me/bootcamp/lessons/${button.dataset.bootcampResource}/resource-complete`, { method: 'POST' }); data.bootcamp = result.bootcamp; }));
+  document.querySelectorAll('[data-bootcamp-contract]').forEach(button => button.onclick = () => mutate(async () => { const result = await api(`/api/me/bootcamp/lessons/${button.dataset.bootcampContract}/contract-complete`, { method: 'POST' }); data.bootcamp = result.bootcamp; }));
+  document.querySelectorAll('[data-bootcamp-add-module]').forEach(form => form.onsubmit = event => { event.preventDefault(); const formData = new FormData(form); mutate(() => api('/api/bootcamp/modules', { method: 'POST', body: JSON.stringify({ title: formData.get('title'), description: formData.get('description') }) })); });
+  document.querySelectorAll('[data-bootcamp-module-form]').forEach(form => form.onsubmit = event => { event.preventDefault(); const formData = new FormData(form); mutate(() => api(`/api/bootcamp/modules/${form.dataset.bootcampModuleForm}`, { method: 'PATCH', body: JSON.stringify({ title: formData.get('title'), description: formData.get('description') }) })); });
+  document.querySelectorAll('[data-bootcamp-delete-module]').forEach(button => button.onclick = () => { if (window.confirm('Delete this module and its lessons?')) mutate(() => api(`/api/bootcamp/modules/${button.dataset.bootcampDeleteModule}`, { method: 'DELETE' })); });
+  document.querySelectorAll('[data-bootcamp-move-module]').forEach(button => button.onclick = () => mutate(() => api(`/api/bootcamp/modules/${button.dataset.bootcampMoveModule}/move`, { method: 'POST', body: JSON.stringify({ direction: button.dataset.direction }) })));
+  document.querySelectorAll('[data-bootcamp-add-lesson]').forEach(form => form.onsubmit = event => { event.preventDefault(); const formData = new FormData(form); mutate(() => api(`/api/bootcamp/modules/${form.dataset.bootcampAddLesson}/lessons`, { method: 'POST', body: JSON.stringify({ title: formData.get('title') }) })); });
+  document.querySelectorAll('[data-bootcamp-lesson-form]').forEach(form => form.onsubmit = event => { event.preventDefault(); const formData = new FormData(form); mutate(() => api(`/api/bootcamp/lessons/${form.dataset.bootcampLessonForm}`, { method: 'PATCH', body: JSON.stringify({ title: formData.get('title'), description: formData.get('description'), videoUrl: formData.get('videoUrl'), resourceUrl: formData.get('resourceUrl'), resourceRequired: formData.get('resourceRequired') === 'on', contractUrl: formData.get('contractUrl'), contractRequired: formData.get('contractRequired') === 'on', required: formData.get('required') === 'on' }) })); });
+  document.querySelectorAll('[data-bootcamp-delete-lesson]').forEach(button => button.onclick = () => { if (window.confirm('Delete this lesson?')) mutate(() => api(`/api/bootcamp/lessons/${button.dataset.bootcampDeleteLesson}`, { method: 'DELETE' })); });
+  document.querySelectorAll('[data-bootcamp-move-lesson]').forEach(button => button.onclick = () => mutate(() => api(`/api/bootcamp/lessons/${button.dataset.bootcampMoveLesson}/move`, { method: 'POST', body: JSON.stringify({ direction: button.dataset.direction }) })));
+  document.querySelectorAll('[data-action="add-agent"]').forEach(button => button.onclick = () => { accountModalContext = { mode: 'create' }; showAccountModal = true; render(); });
+  document.querySelectorAll('[data-action="add-task"]').forEach(button => button.onclick = () => { editingTask = -1; render(); });
+  document.querySelectorAll('[data-edit]').forEach(button => button.onclick = () => { editingTask = button.dataset.edit; render(); });
+  document.querySelectorAll('[data-delete]').forEach(button => button.onclick = () => mutate(() => api(`/api/stages/${data.stages[selectedStage].id}/tasks/${button.dataset.delete}`, { method: 'DELETE' })));
+  document.querySelectorAll('[data-move]').forEach(button => button.onclick = () => mutate(() => api(`/api/stages/${data.stages[selectedStage].id}/tasks/${button.dataset.move}/move`, { method: 'POST', body: JSON.stringify({ direction: button.dataset.direction }) })));
+  document.querySelectorAll('[data-action="close-modal"]').forEach(button => button.onclick = () => { editingTask = null; render(); });
+  document.querySelectorAll('[data-action="close-account"]').forEach(button => button.onclick = () => { showAccountModal = false; accountModalContext = null; render(); });
+  document.querySelectorAll('[data-action="close-temp-password"]').forEach(button => button.onclick = () => { tempPasswordNotice = null; render(); });
+  document.querySelectorAll('[data-action="back-to-overview"]').forEach(button => button.onclick = () => { view = 'owner'; selectedAgent = null; render(); });
+  const changePasswordForm = document.querySelector('#change-password-form');
+  if (changePasswordForm) changePasswordForm.onsubmit = async event => { event.preventDefault(); const formData = new FormData(changePasswordForm); accountSettingsError = ''; accountSettingsNotice = ''; try { await api('/api/account/password', { method: 'POST', body: JSON.stringify({ currentPassword: formData.get('currentPassword'), newPassword: formData.get('newPassword'), confirmPassword: formData.get('confirmPassword') }) }); accountSettingsNotice = 'Password changed successfully.'; changePasswordForm.reset(); } catch (error) { accountSettingsError = error.message; } render(); };
+  document.querySelectorAll('[data-action="save-stage-settings"]').forEach(button => button.onclick = () => mutate(() => api(`/api/stages/${data.stages[selectedStage].id}`, { method: 'PATCH', body: JSON.stringify({ timeframe: Number(document.querySelector('#timeframe').value) || 1, reward: document.querySelector('#stage-reward').value, resourceUrl: document.querySelector('#stage-resource').value }) })));
+
+  const taskForm = document.querySelector('#task-form');
+  if (taskForm) taskForm.onsubmit = event => { event.preventDefault(); const formData = new FormData(taskForm); const payload = { title: formData.get('title'), instructions: formData.get('instructions'), loom: formData.get('loom'), required: formData.get('required') === 'on' }; const stageId = data.stages[selectedStage].id; mutate(() => editingTask === -1 ? api(`/api/stages/${stageId}/tasks`, { method: 'POST', body: JSON.stringify(payload) }) : api(`/api/stages/${stageId}/tasks/${editingTask}`, { method: 'PATCH', body: JSON.stringify(payload) })); editingTask = null; };
+  const accountForm = document.querySelector('#account-form');
+  if (accountForm) accountForm.onsubmit = event => { event.preventDefault(); const formData = new FormData(accountForm); const payload = { name: formData.get('name'), email: formData.get('email'), stageId: formData.get('stage') }; const isConvert = accountModalContext && accountModalContext.mode === 'convert'; mutate(async () => { const result = isConvert ? await api(`/api/recruits/${accountModalContext.recruitId}/convert`, { method: 'POST', body: JSON.stringify(payload) }) : await api('/api/agents', { method: 'POST', body: JSON.stringify(payload) }); tempPasswordNotice = { name: payload.name, tempPassword: result.tempPassword }; }); showAccountModal = false; accountModalContext = null; };
+
+  document.querySelectorAll('[data-action="add-recruit"]').forEach(button => button.onclick = () => { editingRecruit = null; showRecruitModal = true; render(); });
+  document.querySelectorAll('[data-recruit-edit]').forEach(button => button.onclick = () => { editingRecruit = button.dataset.recruitEdit; showRecruitModal = true; render(); });
+  document.querySelectorAll('[data-action="close-recruit-modal"]').forEach(button => button.onclick = () => { showRecruitModal = false; editingRecruit = null; render(); });
+  document.querySelectorAll('[data-recruit-delete]').forEach(button => button.onclick = () => mutate(() => api(`/api/recruits/${button.dataset.recruitDelete}`, { method: 'DELETE' })));
+  document.querySelectorAll('[data-recruit-move]').forEach(button => button.onclick = () => { const order = ['interested', 'licensing', 'licensed']; const recruit = data.recruits.find(r => r.id === button.dataset.recruitMove); const currentIndex = order.indexOf(recruit.status); const nextIndex = button.dataset.direction === 'forward' ? currentIndex + 1 : currentIndex - 1; mutate(() => api(`/api/recruits/${recruit.id}`, { method: 'PATCH', body: JSON.stringify({ status: order[nextIndex] }) })); });
+  document.querySelectorAll('[data-recruit-convert]').forEach(button => button.onclick = () => { accountModalContext = { mode: 'convert', recruitId: button.dataset.recruitConvert }; showAccountModal = true; render(); });
+  const recruitForm = document.querySelector('#recruit-form');
+  if (recruitForm) recruitForm.onsubmit = event => { event.preventDefault(); const formData = new FormData(recruitForm); const payload = { name: formData.get('name'), email: formData.get('email'), phone: formData.get('phone'), notes: formData.get('notes') }; mutate(() => editingRecruit ? api(`/api/recruits/${editingRecruit}`, { method: 'PATCH', body: JSON.stringify(payload) }) : api('/api/recruits', { method: 'POST', body: JSON.stringify(payload) })); showRecruitModal = false; editingRecruit = null; };
+}
+
+boot();
