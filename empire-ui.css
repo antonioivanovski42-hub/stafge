@@ -1593,7 +1593,7 @@ body::after {
   background: #060a10 !important;
 }
 .auth-screen::before {
-  content: 'FORGE / IDENTITY GATE';
+  content: 'EMPIRE / IDENTITY GATE';
   position: absolute;
   top: 28px;
   left: 34px;

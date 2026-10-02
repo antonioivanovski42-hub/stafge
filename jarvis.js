@@ -146,7 +146,7 @@
     intro.id = 'jv-intro';
     intro.innerHTML = `<canvas aria-hidden="true"></canvas>
       <div class="jv-hud" aria-hidden="true"><i></i><i></i><i></i><i></i><span class="jv-scale jv-scale-l"></span><span class="jv-scale jv-scale-r"></span></div>
-      <div class="jv-intro-copy"><h1>THE AGENT FORGE</h1><button type="button" class="jv-enter"><span>ENTER SYSTEM</span></button></div>`;
+      <div class="jv-intro-copy"><h1>WELCOME TO EMPIRE FINANCIAL</h1><button type="button" class="jv-enter"><span>ENTER SYSTEM</span></button></div>`;
     document.body.append(intro);
     const canvas = intro.querySelector('canvas');
     let ctx, w, h, cx, cy, R;
@@ -283,7 +283,6 @@
       setTimeout(destroy, 1350);
     }
     function destroy() { stopped = true; cancelAnimationFrame(raf); intro.remove(); }
-    function skip() { document.body.classList.add('jv-entered', 'jv-skipped'); destroy(); }
 
     resize();
     window.addEventListener('resize', resize);
@@ -292,7 +291,7 @@
     if (reduceMotion) { frame(0); cancelAnimationFrame(raf); } else raf = requestAnimationFrame(frame);
     requestAnimationFrame(() => intro.classList.add('jv-ready'));
     intro.querySelector('.jv-enter').focus({ preventScroll: true });
-    return { enter, skip, el: intro };
+    return { enter, el: intro };
   }
 
   /* ───────────── Attention hierarchy + physical interaction ───────────── */
@@ -348,17 +347,8 @@
   function init() {
     startEnvironment();
     setupAttention();
-    const intro = buildIntro();
-    // Resume an existing session without replaying the intro; otherwise wait for the login gate.
-    const body = document.body;
-    const check = () => {
-      if (!document.getElementById('jv-intro')) return true;
-      if (!body.classList.contains('logged-out') && getComputedStyle(document.querySelector('.app-shell')).display !== 'none') { intro.skip(); return true; }
-      return false;
-    };
-    const obs = new MutationObserver(() => { if (check()) obs.disconnect(); });
-    obs.observe(body, { attributes: true, attributeFilter: ['class'] });
-    obs.observe(document.querySelector('.app-shell'), { attributes: true, attributeFilter: ['style'] });
+    // The entry screen shows on every load; an active session is kept and simply revealed on entry.
+    buildIntro();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
