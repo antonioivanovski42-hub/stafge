@@ -306,7 +306,7 @@
       const key = role + '|' + title.textContent;
       if (key !== lastKey) {
         lastKey = key; app.classList.remove('jv-arrive'); void app.offsetWidth; app.classList.add('jv-arrive');
-        clearTimeout(enterTimer); enterTimer = setTimeout(() => app.classList.remove('jv-arrive'), 1600);
+        clearTimeout(enterTimer); enterTimer = setTimeout(() => app.classList.remove('jv-arrive'), 700);
       }
       document.body.classList.toggle('jv-has-objective', !!app.querySelector('.current-objective'));
       app.querySelector('.current-card')?.classList.add('jv-hero');

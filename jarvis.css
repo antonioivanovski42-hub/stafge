@@ -185,16 +185,16 @@ body.jv-has-objective .command-map:not(:hover):not(:focus-within) { opacity: .8;
   border: 1.5px solid rgba(61, 225, 255, .9); box-shadow: 0 0 20px rgba(61, 225, 255, .8), inset 0 0 12px rgba(61, 225, 255, .5);
   animation: jv-pulse .7s ease-out forwards;
 }
-#app.jv-arrive > * { animation: jv-enter .85s var(--jv-ease) both; }
-#app.jv-arrive > *:nth-child(2) { animation-delay: .08s; }
-#app.jv-arrive > *:nth-child(3) { animation-delay: .16s; }
-#app.jv-arrive > *:nth-child(n+4) { animation-delay: .24s; }
+#app.jv-arrive > * { animation: jv-enter .38s var(--jv-ease) both; }
+#app.jv-arrive > *:nth-child(2) { animation-delay: .04s; }
+#app.jv-arrive > *:nth-child(3) { animation-delay: .08s; }
+#app.jv-arrive > *:nth-child(n+4) { animation-delay: .12s; }
 
 @keyframes jv-scan { to { background-position: 0 300px; } }
 @keyframes jv-breathe { 50% { box-shadow: 0 0 36px rgba(61, 225, 255, .35); } }
 @keyframes jv-fade { from { opacity: 0; } }
 @keyframes jv-rise { from { opacity: 0; transform: translateY(40px) translateZ(-120px) scale(.94); filter: blur(8px); } }
-@keyframes jv-enter { from { opacity: 0; transform: translateY(26px) translateZ(-90px); filter: blur(6px); } }
+@keyframes jv-enter { from { opacity: .55; transform: translateY(10px); } }
 @keyframes jv-modal { from { opacity: 0; transform: translateY(40px) rotateX(14deg) scale(.92); filter: blur(6px); } }
 @keyframes jv-objective { 50% { box-shadow: 0 0 56px rgba(61, 225, 255, .38), inset 0 0 0 1px rgba(61, 225, 255, .5); } }
 @keyframes jv-alert { 50% { box-shadow: 0 0 70px rgba(229, 189, 114, .38), 0 20px 60px rgba(0, 0, 0, .5); } }
@@ -237,3 +237,9 @@ body.jv-has-objective .command-map:not(:hover):not(:focus-within) { opacity: .8;
 .stage-ready > span { color: #bfeaf6; font-size: 13px; line-height: 1.45; }
 .stage-ready .primary-button { justify-self: start; margin-top: 6px; }
 .flag.ready { color: #7be9ff; border-color: rgba(61, 225, 255, .5); box-shadow: 0 0 16px rgba(61, 225, 255, .3); }
+
+/* ───── Steady re-renders: no entry animation replays when content refreshes in place ───── */
+#app:not(.jv-arrive) :is(.page-heading, .path-card, .stage-card, .owner-detail, .account-panel, .agent-command-screen, .owner-command-screen, .training-command-screen, .forge-core, .progress-fill, .req-item.done, .req-item.done .check, .bootcamp-lesson.done, .bootcamp-lesson.done .check, .bootcamp-module.current .status-pill, .bootcamp-module.complete) { animation-name: none !important; }
+#app:not(.jv-arrive) :is(.current-objective, .stage-ready, .stage-node.current .stage-dot) { animation-name: jv-objective !important; }
+.progress-fill { transition: width .35s var(--jv-ease); }
+#app:not(.jv-arrive) .attention-panel { animation: jv-alert 2.6s ease-in-out infinite !important; }
