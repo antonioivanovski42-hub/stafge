@@ -23,7 +23,7 @@ const db = {
   async exec(text) { return pool.query(text); }
 };
 
-async function main() {
+async function main({ listen = false } = {}) {
   await applySchema(pool);
 // ---------- Password hashing (scrypt, built-in) ----------
 function hashPassword(password) {
@@ -288,6 +288,14 @@ function sendJson(res, code, obj) {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
   res.end(body);
 }
+function sessionCookie(token, req) {
+  const secure = process.env.VERCEL === '1' || req.headers['x-forwarded-proto'] === 'https';
+  return `sid=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_MS / 1000}${secure ? '; Secure' : ''}`;
+}
+function expiredSessionCookie(req) {
+  const secure = process.env.VERCEL === '1' || req.headers['x-forwarded-proto'] === 'https';
+  return `sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`;
+}
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let raw = '';
@@ -337,7 +345,7 @@ const server = http.createServer(async (req, res) => {
       await db.prepare('UPDATE accounts SET password_hash = ?, password_salt = ?, needs_setup = 0 WHERE id = ?').run(hash, salt, owner.id);
       await db.prepare('DELETE FROM sessions WHERE account_id = ?').run(owner.id);
       const token = await createSession(owner.id);
-      res.setHeader('Set-Cookie', `sid=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_MS / 1000}`);
+      res.setHeader('Set-Cookie', sessionCookie(token, req));
       return sendJson(res, 200, { id: owner.id, name: owner.name, role: owner.role, email: owner.email });
     }
     if (pathname === '/api/login' && req.method === 'POST') {
@@ -346,13 +354,13 @@ const server = http.createServer(async (req, res) => {
       if (account && account.needs_setup) return sendJson(res, 403, { error: 'Admin account setup is required before signing in.', needsSetup: true });
       if (!account || !verifyPassword(String(body.password || ''), account.password_salt, account.password_hash)) return sendJson(res, 401, { error: 'Access denied. Check your email and password.' });
       const token = await createSession(account.id);
-      res.setHeader('Set-Cookie', `sid=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_MS / 1000}`);
+      res.setHeader('Set-Cookie', sessionCookie(token, req));
       return sendJson(res, 200, { id: account.id, name: account.name, role: account.role, email: account.email });
     }
     if (pathname === '/api/logout' && req.method === 'POST') {
       const token = parseCookies(req).sid;
       if (token) await db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
-      res.setHeader('Set-Cookie', 'sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+      res.setHeader('Set-Cookie', expiredSessionCookie(req));
       return sendJson(res, 200, { ok: true });
     }
 
@@ -854,7 +862,25 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => console.log(`The Agent Forge running on http://localhost:${PORT}`));
+if (listen) server.listen(PORT, () => console.log(`The Agent Forge running on http://localhost:${PORT}`));
+return server;
 }
 
-main().catch(error => { console.error(error); process.exit(1); });
+if (require.main === module) {
+  main({ listen: true }).catch(error => { console.error(error); process.exit(1); });
+} else {
+  const serverPromise = main();
+  module.exports = async (req, res) => {
+    try {
+      const server = await serverPromise;
+      server.emit('request', req, res);
+    } catch (error) {
+      console.error(error);
+      if (!res.headersSent) {
+        const body = JSON.stringify({ error: 'Server startup failed.' });
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
+        res.end(body);
+      }
+    }
+  };
+}
