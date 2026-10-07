@@ -5,9 +5,13 @@
   "description": "The Agent Forge — agency operating system",
   "main": "server.js",
   "scripts": {
-    "start": "node --no-warnings server.js"
+    "start": "node --no-warnings server.js",
+    "migrate:postgres": "node --no-warnings scripts/migrate-sqlite-to-postgres.js"
   },
   "engines": {
     "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
   }
 }
