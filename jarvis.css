@@ -1,9 +1,9 @@
 /* The Agent Forge — JARVIS presentation layer. Visual only; loaded after empire-ui.css. */
 :root {
-  --jv-cyan: #3de1ff;
-  --jv-blue: #398bff;
+  --jv-cyan: #e4b858;
+  --jv-blue: #e3b655;
   --jv-ease: cubic-bezier(.2, .8, .2, 1);
-  --jv-glow: 0 0 0 1px rgba(61, 225, 255, .35), 0 0 34px rgba(61, 225, 255, .16), 0 18px 60px rgba(0, 0, 0, .5);
+  --jv-glow: 0 0 0 1px rgba(228, 184, 88, .35), 0 0 34px rgba(228, 184, 88, .16), 0 18px 60px rgba(0, 0, 0, .5);
 }
 
 /* ───── Environment ───── */
@@ -11,7 +11,7 @@
 body { background-color: #040a11 !important; }
 .main-content, .app-shell { background: transparent !important; }
 .auth-screen { background: transparent !important; }
-.auth-screen::after { background: radial-gradient(ellipse at 50% 45%, rgba(21, 110, 160, .16), transparent 55%) !important; }
+.auth-screen::after { background: radial-gradient(ellipse at 50% 45%, rgba(145, 110, 36, .16), transparent 55%) !important; }
 body::after {
   content: ''; display: block !important; position: fixed; inset: 0; z-index: 0; pointer-events: none;
   background: radial-gradient(ellipse at center, transparent 55%, rgba(1, 4, 8, .62) 100%);
@@ -19,20 +19,20 @@ body::after {
 .sidebar { background: linear-gradient(180deg, rgba(5, 12, 20, .8), rgba(4, 9, 15, .9)) !important; backdrop-filter: blur(22px) saturate(1.3); }
 .topbar { background: linear-gradient(180deg, rgba(4, 10, 17, .78), rgba(4, 10, 17, 0)) !important; backdrop-filter: blur(10px); }
 .card, .path-card, .modal, .attention-panel {
-  background: linear-gradient(160deg, rgba(13, 26, 40, .72), rgba(7, 15, 24, .78)) !important;
+  background: linear-gradient(160deg, rgba(23, 26, 30, .72), rgba(7, 15, 24, .78)) !important;
   backdrop-filter: blur(14px) saturate(1.25);
 }
 
 /* ───── Entry sequence ───── */
 #jv-intro {
   position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center; overflow: hidden;
-  background: radial-gradient(ellipse at 50% 42%, #05283a 0%, #031420 38%, #02070d 78%);
+  background: radial-gradient(ellipse at 50% 42%, #1c2123 0%, #031420 38%, #02070d 78%);
   transition: opacity .85s ease .45s, transform 1.2s var(--jv-ease), filter 1s ease .3s;
 }
 #jv-intro canvas { position: absolute; inset: 0; }
 #jv-intro::before {
   content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .5;
-  background: repeating-linear-gradient(0deg, rgba(61, 225, 255, .035) 0 1px, transparent 1px 3px);
+  background: repeating-linear-gradient(0deg, rgba(228, 184, 88, .035) 0 1px, transparent 1px 3px);
   mix-blend-mode: screen;
 }
 #jv-intro::after {
@@ -41,31 +41,31 @@ body::after {
 }
 #jv-intro::before { animation: jv-scan 9s linear infinite; background-size: 100% 3px; }
 .jv-hud { position: absolute; inset: 26px; pointer-events: none; z-index: 2; }
-.jv-hud i { position: absolute; width: 46px; height: 46px; border: 1px solid rgba(61, 225, 255, .55); }
+.jv-hud i { position: absolute; width: 46px; height: 46px; border: 1px solid rgba(228, 184, 88, .55); }
 .jv-hud i:nth-child(1) { top: 0; left: 0; border-right: 0; border-bottom: 0; }
 .jv-hud i:nth-child(2) { top: 0; right: 0; border-left: 0; border-bottom: 0; }
 .jv-hud i:nth-child(3) { bottom: 0; left: 0; border-right: 0; border-top: 0; }
 .jv-hud i:nth-child(4) { bottom: 0; right: 0; border-left: 0; border-top: 0; }
 .jv-scale { position: absolute; top: 50%; width: 9px; height: 180px; transform: translateY(-50%); opacity: .5;
-  background: repeating-linear-gradient(180deg, rgba(61, 225, 255, .8) 0 1px, transparent 1px 12px); }
+  background: repeating-linear-gradient(180deg, rgba(228, 184, 88, .8) 0 1px, transparent 1px 12px); }
 .jv-scale-l { left: 6px; } .jv-scale-r { right: 6px; }
 .jv-intro-copy {
   position: absolute; z-index: 3; left: 0; right: 0; bottom: clamp(48px, 11vh, 120px);
   display: grid; justify-items: center; gap: 26px; text-align: center;
 }
 .jv-intro-copy h1 {
-  margin: 0; padding: 0 20px; color: #e8fbff; font: 600 clamp(20px, 3vw, 38px) 'Barlow Condensed', sans-serif; letter-spacing: .32em; text-indent: .32em;
-  text-shadow: 0 0 22px rgba(61, 225, 255, .75), 0 0 60px rgba(57, 139, 255, .5);
+  margin: 0; padding: 0 20px; color: #fcf7eb; font: 600 clamp(20px, 3vw, 38px) 'Barlow Condensed', sans-serif; letter-spacing: .32em; text-indent: .32em;
+  text-shadow: 0 0 22px rgba(228, 184, 88, .75), 0 0 60px rgba(227, 182, 85, .5);
   opacity: 0; transform: translateY(14px); transition: opacity 1.4s ease .5s, transform 1.4s var(--jv-ease) .5s;
 }
 .jv-enter {
-  position: relative; padding: 14px 38px; border: 1px solid rgba(61, 225, 255, .55); border-radius: 0; cursor: pointer;
-  background: rgba(61, 225, 255, .05); color: #bff4ff; font: 500 12px 'IBM Plex Mono', monospace; letter-spacing: .38em; text-indent: .38em;
+  position: relative; padding: 14px 38px; border: 1px solid rgba(228, 184, 88, .55); border-radius: 0; cursor: pointer;
+  background: rgba(228, 184, 88, .05); color: #f6e7c8; font: 500 12px 'IBM Plex Mono', monospace; letter-spacing: .38em; text-indent: .38em;
   clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
   opacity: 0; transform: translateY(14px); transition: opacity 1.2s ease 1.1s, transform 1.2s var(--jv-ease) 1.1s, background .3s, color .3s, letter-spacing .4s var(--jv-ease);
   animation: jv-breathe 2.8s ease-in-out 2.4s infinite;
 }
-.jv-enter:hover, .jv-enter:focus-visible { background: rgba(61, 225, 255, .2); color: #fff; letter-spacing: .5em; outline: none; box-shadow: 0 0 40px rgba(61, 225, 255, .4); }
+.jv-enter:hover, .jv-enter:focus-visible { background: rgba(228, 184, 88, .2); color: #fff; letter-spacing: .5em; outline: none; box-shadow: 0 0 40px rgba(228, 184, 88, .4); }
 #jv-intro.jv-ready .jv-intro-copy h1, #jv-intro.jv-ready .jv-enter { opacity: 1; transform: none; }
 #jv-intro.jv-leaving { opacity: 0; transform: scale(1.35); filter: blur(8px) brightness(1.8); pointer-events: none; }
 #jv-intro.jv-leaving .jv-intro-copy { opacity: 0; transition: opacity .35s ease; }
@@ -75,11 +75,11 @@ body::after {
 /* login arrives from depth after entry */
 body.jv-entered:not(.jv-skipped) .auth-card { animation: jv-rise 1.1s var(--jv-ease) .55s both; }
 .auth-card {
-  border: 1px solid rgba(61, 225, 255, .28) !important;
-  background: linear-gradient(160deg, rgba(8, 24, 38, .78), rgba(4, 12, 20, .86)) !important;
+  border: 1px solid rgba(228, 184, 88, .28) !important;
+  background: linear-gradient(160deg, rgba(20, 23, 26, .78), rgba(4, 12, 20, .86)) !important;
   box-shadow: var(--jv-glow); backdrop-filter: blur(20px);
 }
-.auth-card input:focus { border-color: var(--jv-cyan) !important; box-shadow: 0 0 0 1px var(--jv-cyan), 0 0 24px rgba(61, 225, 255, .22); }
+.auth-card input:focus { border-color: var(--jv-cyan) !important; box-shadow: 0 0 0 1px var(--jv-cyan), 0 0 24px rgba(228, 184, 88, .22); }
 body.jv-entered:not(.jv-skipped) .auth-screen::before { animation: jv-fade 1.4s ease 1s both; }
 
 /* ───── Attention hierarchy ───── */
@@ -92,38 +92,38 @@ body.jv-entered:not(.jv-skipped) .auth-screen::before { animation: jv-fade 1.4s 
 }
 .card::after, .milestone-card::after {
   content: '' !important; display: block !important; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0;
-  background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 0%), rgba(61, 225, 255, .1), transparent 60%); transition: opacity .4s;
+  background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 0%), rgba(228, 184, 88, .1), transparent 60%); transition: opacity .4s;
 }
 .card:hover::after, .milestone-card:hover::after { opacity: 1; }
 
 /* 1 · Current objective: the loudest element on screen */
 .jv-hero {
-  border-color: rgba(61, 225, 255, .5) !important;
-  box-shadow: 0 0 0 1px rgba(61, 225, 255, .18), 0 0 70px rgba(61, 225, 255, .14), 0 30px 90px rgba(0, 0, 0, .55) !important;
+  border-color: rgba(228, 184, 88, .5) !important;
+  box-shadow: 0 0 0 1px rgba(228, 184, 88, .18), 0 0 70px rgba(228, 184, 88, .14), 0 30px 90px rgba(0, 0, 0, .55) !important;
 }
-.jv-hero h2 { text-shadow: 0 0 30px rgba(61, 225, 255, .45); }
-.forge-core { filter: drop-shadow(0 0 28px rgba(61, 225, 255, .35)); }
+.jv-hero h2 { text-shadow: 0 0 30px rgba(228, 184, 88, .45); }
+.forge-core { filter: drop-shadow(0 0 28px rgba(228, 184, 88, .35)); }
 .req-item.current-objective {
   z-index: 2; transform: translateZ(0) scale(1.012); transform-origin: left center;
   border-left-width: 3px !important; border-radius: 4px;
-  background: linear-gradient(90deg, rgba(61, 225, 255, .2), rgba(57, 139, 255, .04) 80%) !important;
-  box-shadow: 0 0 36px rgba(61, 225, 255, .22), inset 0 0 0 1px rgba(61, 225, 255, .3);
+  background: linear-gradient(90deg, rgba(228, 184, 88, .2), rgba(227, 182, 85, .04) 80%) !important;
+  box-shadow: 0 0 36px rgba(228, 184, 88, .22), inset 0 0 0 1px rgba(228, 184, 88, .3);
   animation: jv-objective 3.2s ease-in-out infinite;
 }
-.req-item.current-objective b { color: #fff !important; font-size: 1.08em; text-shadow: 0 0 16px rgba(61, 225, 255, .55); }
-.bootcamp-lesson.current-objective { box-shadow: 0 0 36px rgba(61, 225, 255, .2), inset 0 0 0 1px rgba(61, 225, 255, .28); animation: jv-objective 3.2s ease-in-out infinite; }
+.req-item.current-objective b { color: #fff !important; font-size: 1.08em; text-shadow: 0 0 16px rgba(228, 184, 88, .55); }
+.bootcamp-lesson.current-objective { box-shadow: 0 0 36px rgba(228, 184, 88, .2), inset 0 0 0 1px rgba(228, 184, 88, .28); animation: jv-objective 3.2s ease-in-out infinite; }
 
 /* 2 · Next action: prominent and interactive */
 .mission-continue {
   position: relative; overflow: hidden; width: 100%; margin-top: 16px;
-  background: linear-gradient(120deg, #1fb8e6, #398bff) !important; color: #02101a !important; font-weight: 800;
-  box-shadow: 0 0 30px rgba(61, 225, 255, .45), 0 10px 30px rgba(0, 0, 0, .4) !important; border: 0 !important;
+  background: linear-gradient(120deg, #d09f35, #e3b655) !important; color: #02101a !important; font-weight: 800;
+  box-shadow: 0 0 30px rgba(228, 184, 88, .45), 0 10px 30px rgba(0, 0, 0, .4) !important; border: 0 !important;
   transition: transform .3s var(--jv-ease), box-shadow .3s;
 }
 .mission-continue::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, .55) 50%, transparent 70%); transform: translateX(-120%); animation: jv-sheen 3.6s ease-in-out infinite; }
-.mission-continue:hover { transform: translateY(-3px) scale(1.02); box-shadow: 0 0 56px rgba(61, 225, 255, .7), 0 16px 40px rgba(0, 0, 0, .5) !important; }
+.mission-continue:hover { transform: translateY(-3px) scale(1.02); box-shadow: 0 0 56px rgba(228, 184, 88, .7), 0 16px 40px rgba(0, 0, 0, .5) !important; }
 .mission-continue:active { transform: scale(.98); }
-.milestone-card { border: 1px solid rgba(61, 225, 255, .3) !important; box-shadow: 0 0 40px rgba(61, 225, 255, .1); }
+.milestone-card { border: 1px solid rgba(228, 184, 88, .3) !important; box-shadow: 0 0 40px rgba(228, 184, 88, .1); }
 .milestone-card:hover { transform: translateY(-4px) translateZ(20px) rotateX(var(--rx)) rotateY(var(--ry)); box-shadow: var(--jv-glow); }
 
 /* 3 · Alerts surface */
@@ -134,7 +134,7 @@ body.jv-entered:not(.jv-skipped) .auth-screen::before { animation: jv-fade 1.4s 
   animation: jv-alert 2.6s ease-in-out infinite, jv-rise .8s var(--jv-ease) both;
 }
 .status-pill.attention, .flag:not(.on-track) { box-shadow: 0 0 18px rgba(229, 189, 114, .35); }
-.reward-toast { animation: jv-rise .7s var(--jv-ease) both; box-shadow: 0 0 60px rgba(61, 225, 255, .45) !important; }
+.reward-toast { animation: jv-rise .7s var(--jv-ease) both; box-shadow: 0 0 60px rgba(228, 184, 88, .45) !important; }
 .form-error:not(:empty) { text-shadow: 0 0 14px rgba(223, 131, 136, .6); }
 
 /* 4 · Secondary information recedes; focus brings it forward */
@@ -146,15 +146,15 @@ body.jv-entered:not(.jv-skipped) .auth-screen::before { animation: jv-fade 1.4s 
 body.jv-has-objective #app .card:not(.jv-hero):not(.requirements-card):not(:hover):not(:focus-within),
 body.jv-has-objective #app .reward-card:not(:hover) { opacity: .62; filter: saturate(.7); }
 .history-card:hover, .resources-card:hover, .reward-card:hover, .history-card:focus-within, .resources-card:focus-within { opacity: 1; filter: none; }
-.requirements-card { border-color: rgba(61, 225, 255, .2) !important; }
+.requirements-card { border-color: rgba(228, 184, 88, .2) !important; }
 .metrics .metric { opacity: .85; }
-.progress-fill { box-shadow: 0 0 18px rgba(61, 225, 255, .7); }
+.progress-fill { box-shadow: 0 0 18px rgba(228, 184, 88, .7); }
 
 /* 5 · Future / locked content is minimized until relevant */
 .stage-node.locked { opacity: .22; filter: grayscale(.7) blur(.4px); transform: scale(.94); }
 .stage-node.locked:hover { opacity: .6; filter: none; transform: scale(1); }
-.stage-node.current { opacity: 1; z-index: 2; filter: drop-shadow(0 0 16px rgba(61, 225, 255, .75)); }
-.stage-node.current .stage-dot { box-shadow: 0 0 0 4px rgba(61, 225, 255, .18), 0 0 26px rgba(61, 225, 255, .8); animation: jv-objective 2.4s ease-in-out infinite; }
+.stage-node.current { opacity: 1; z-index: 2; filter: drop-shadow(0 0 16px rgba(228, 184, 88, .75)); }
+.stage-node.current .stage-dot { box-shadow: 0 0 0 4px rgba(228, 184, 88, .18), 0 0 26px rgba(228, 184, 88, .8); animation: jv-objective 2.4s ease-in-out infinite; }
 .stage-node.complete { opacity: .6; }
 body[data-role='agent'] .bootcamp-module.locked { opacity: .3; filter: grayscale(.8); transform: scale(.985); }
 body[data-role='agent'] .bootcamp-module.locked > :not(.bootcamp-module-head) {
@@ -163,7 +163,7 @@ body[data-role='agent'] .bootcamp-module.locked > :not(.bootcamp-module-head) {
 }
 body[data-role='agent'] .bootcamp-module.locked:hover, body[data-role='agent'] .bootcamp-module.locked:focus-within { opacity: .7; filter: none; transform: none; }
 body[data-role='agent'] .bootcamp-module.complete:not(:hover):not(:focus-within) { opacity: .55; }
-body[data-role='agent'] .bootcamp-module.current { border-color: rgba(61, 225, 255, .5) !important; box-shadow: 0 0 60px rgba(61, 225, 255, .12), 0 30px 80px rgba(0, 0, 0, .5) !important; }
+body[data-role='agent'] .bootcamp-module.current { border-color: rgba(228, 184, 88, .5) !important; box-shadow: 0 0 60px rgba(228, 184, 88, .12), 0 30px 80px rgba(0, 0, 0, .5) !important; }
 .bootcamp-module.current .bootcamp-lesson:not(.done):not(.current-objective) { opacity: .6; }
 .bootcamp-module.current .bootcamp-lesson:not(.done):not(.current-objective):hover { opacity: 1; }
 .bootcamp-lesson.done { opacity: .4; }
@@ -172,17 +172,17 @@ body.jv-has-objective .command-map:not(:hover):not(:focus-within) { opacity: .8;
 .command-map, .command-next-rail > *, .mission-list, .forge-core-well { transition: opacity .5s var(--jv-ease), transform .45s var(--jv-ease), filter .5s; }
 .nav-item { transition: opacity .3s, transform .3s var(--jv-ease), background .3s, border-color .3s !important; }
 .nav-item:hover { opacity: 1 !important; transform: translateX(4px); }
-.nav-item.active { box-shadow: inset 2px 0 0 var(--jv-cyan), 0 0 28px rgba(61, 225, 255, .12); }
+.nav-item.active { box-shadow: inset 2px 0 0 var(--jv-cyan), 0 0 28px rgba(228, 184, 88, .12); }
 
 /* ───── Depth & activation ───── */
-.card:hover, .stage-node:not(:disabled):hover { box-shadow: var(--jv-glow) !important; border-color: rgba(61, 225, 255, .45) !important; transform: translateY(-4px) rotateX(var(--rx)) rotateY(var(--ry)) !important; }
-.check:not(:disabled):hover { box-shadow: 0 0 22px rgba(61, 225, 255, .7); transform: scale(1.12); }
+.card:hover, .stage-node:not(:disabled):hover { box-shadow: var(--jv-glow) !important; border-color: rgba(228, 184, 88, .45) !important; transform: translateY(-4px) rotateX(var(--rx)) rotateY(var(--ry)) !important; }
+.check:not(:disabled):hover { box-shadow: 0 0 22px rgba(228, 184, 88, .7); transform: scale(1.12); }
 .check { transition: transform .3s var(--jv-ease), box-shadow .3s, background .3s; }
-.modal-backdrop { backdrop-filter: blur(10px) brightness(.55); background: radial-gradient(circle at 50% 40%, rgba(6, 40, 60, .55), rgba(1, 5, 9, .88)) !important; animation: jv-fade .4s ease both; perspective: 1400px; }
-.modal { animation: jv-modal .7s var(--jv-ease) both; border: 1px solid rgba(61, 225, 255, .4) !important; box-shadow: var(--jv-glow) !important; transform-origin: 50% 100%; }
+.modal-backdrop { backdrop-filter: blur(10px) brightness(.55); background: radial-gradient(circle at 50% 40%, rgba(29, 34, 37, .55), rgba(1, 5, 9, .88)) !important; animation: jv-fade .4s ease both; perspective: 1400px; }
+.modal { animation: jv-modal .7s var(--jv-ease) both; border: 1px solid rgba(228, 184, 88, .4) !important; box-shadow: var(--jv-glow) !important; transform-origin: 50% 100%; }
 .jv-pulse {
   position: fixed; z-index: 10000; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; pointer-events: none;
-  border: 1.5px solid rgba(61, 225, 255, .9); box-shadow: 0 0 20px rgba(61, 225, 255, .8), inset 0 0 12px rgba(61, 225, 255, .5);
+  border: 1.5px solid rgba(228, 184, 88, .9); box-shadow: 0 0 20px rgba(228, 184, 88, .8), inset 0 0 12px rgba(228, 184, 88, .5);
   animation: jv-pulse .7s ease-out forwards;
 }
 #app.jv-arrive > * { animation: jv-enter .38s var(--jv-ease) both; }
@@ -191,12 +191,12 @@ body.jv-has-objective .command-map:not(:hover):not(:focus-within) { opacity: .8;
 #app.jv-arrive > *:nth-child(n+4) { animation-delay: .12s; }
 
 @keyframes jv-scan { to { background-position: 0 300px; } }
-@keyframes jv-breathe { 50% { box-shadow: 0 0 36px rgba(61, 225, 255, .35); } }
+@keyframes jv-breathe { 50% { box-shadow: 0 0 36px rgba(228, 184, 88, .35); } }
 @keyframes jv-fade { from { opacity: 0; } }
 @keyframes jv-rise { from { opacity: 0; transform: translateY(40px) translateZ(-120px) scale(.94); filter: blur(8px); } }
 @keyframes jv-enter { from { opacity: .55; transform: translateY(10px); } }
 @keyframes jv-modal { from { opacity: 0; transform: translateY(40px) rotateX(14deg) scale(.92); filter: blur(6px); } }
-@keyframes jv-objective { 50% { box-shadow: 0 0 56px rgba(61, 225, 255, .38), inset 0 0 0 1px rgba(61, 225, 255, .5); } }
+@keyframes jv-objective { 50% { box-shadow: 0 0 56px rgba(228, 184, 88, .38), inset 0 0 0 1px rgba(228, 184, 88, .5); } }
 @keyframes jv-alert { 50% { box-shadow: 0 0 70px rgba(229, 189, 114, .38), 0 20px 60px rgba(0, 0, 0, .5); } }
 @keyframes jv-sheen { 0%, 55% { transform: translateX(-120%); } 100% { transform: translateX(120%); } }
 @keyframes jv-pulse { to { transform: scale(9); opacity: 0; } }
@@ -222,7 +222,7 @@ body.jv-has-objective .command-map:not(:hover):not(:focus-within) { opacity: .8;
 .command-map .stage-node.locked { opacity: .45; }
 .command-map .stage-node .stage-dot,
 .command-map .stage-node.current .stage-dot { width: 28px; height: 28px; margin: 0 0 12px 0; flex: none; }
-.command-map .stage-node.current .stage-dot { box-shadow: 0 0 0 4px rgba(61, 225, 255, .14), 0 0 22px rgba(61, 225, 255, .55) !important; }
+.command-map .stage-node.current .stage-dot { box-shadow: 0 0 0 4px rgba(228, 184, 88, .14), 0 0 22px rgba(228, 184, 88, .55) !important; }
 .command-map .stage-node:not(:last-child)::after { top: 14px !important; left: 44px !important; right: 14px !important; }
 .command-map .stage-label, .command-map .stage-status { display: block; padding: 0; margin: 0; text-align: left; }
 .command-map .stage-status { margin-top: 4px; }
@@ -230,13 +230,13 @@ body.jv-has-objective .command-map:not(:hover):not(:focus-within) { opacity: .8;
 /* ───── Stage ready for advancement ───── */
 .stage-ready {
   display: grid; gap: 6px; margin: 16px 0 4px; padding: 13px 15px;
-  border: 1px solid rgba(61, 225, 255, .55); border-left-width: 3px; background: linear-gradient(90deg, rgba(61, 225, 255, .14), rgba(57, 139, 255, .03));
-  box-shadow: 0 0 30px rgba(61, 225, 255, .2); animation: jv-objective 3.2s ease-in-out infinite;
+  border: 1px solid rgba(228, 184, 88, .55); border-left-width: 3px; background: linear-gradient(90deg, rgba(228, 184, 88, .14), rgba(227, 182, 85, .03));
+  box-shadow: 0 0 30px rgba(228, 184, 88, .2); animation: jv-objective 3.2s ease-in-out infinite;
 }
-.stage-ready b { color: #dffaff; font: 500 10px 'IBM Plex Mono', monospace; letter-spacing: .14em; text-transform: uppercase; }
-.stage-ready > span { color: #bfeaf6; font-size: 13px; line-height: 1.45; }
+.stage-ready b { color: #fbf3e3; font: 500 10px 'IBM Plex Mono', monospace; letter-spacing: .14em; text-transform: uppercase; }
+.stage-ready > span { color: #f0e2c5; font-size: 13px; line-height: 1.45; }
 .stage-ready .primary-button { justify-self: start; margin-top: 6px; }
-.flag.ready { color: #7be9ff; border-color: rgba(61, 225, 255, .5); box-shadow: 0 0 16px rgba(61, 225, 255, .3); }
+.flag.ready { color: #edce8d; border-color: rgba(228, 184, 88, .5); box-shadow: 0 0 16px rgba(228, 184, 88, .3); }
 
 /* ───── Steady re-renders: no entry animation replays when content refreshes in place ───── */
 #app:not(.jv-arrive) :is(.page-heading, .path-card, .stage-card, .owner-detail, .account-panel, .agent-command-screen, .owner-command-screen, .training-command-screen, .forge-core, .progress-fill, .req-item.done, .req-item.done .check, .bootcamp-lesson.done, .bootcamp-lesson.done .check, .bootcamp-module.current .status-pill, .bootcamp-module.complete) { animation-name: none !important; }

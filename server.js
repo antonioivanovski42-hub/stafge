@@ -123,6 +123,16 @@ CREATE TABLE IF NOT EXISTS bootcamp_video_watches (
   watched_at TEXT NOT NULL,
   PRIMARY KEY (agent_id, lesson_id)
 );
+CREATE TABLE IF NOT EXISTS bootcamp_video_progress (
+  agent_id TEXT NOT NULL,
+  lesson_id TEXT NOT NULL,
+  watched_ranges TEXT NOT NULL DEFAULT '[]',
+  duration_seconds REAL,
+  last_position REAL NOT NULL DEFAULT 0,
+  checkpoint_at INTEGER NOT NULL,
+  last_playing INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (agent_id, lesson_id)
+);
 CREATE TABLE IF NOT EXISTS bootcamp_resource_completions (
   agent_id TEXT NOT NULL,
   lesson_id TEXT NOT NULL,
@@ -234,17 +244,64 @@ function serializeStage(stage) {
   return { id: stage.id, label: stage.label, short: stage.short, description: stage.description, timeframe: stage.timeframe, threshold: stage.threshold, reward: stage.reward, resources: stage.resource_url ? [stage.resource_url] : [], tasks: tasks.map(t => ({ id: t.id, title: t.title, instructions: t.instructions, loom: t.loom_url, required: !!t.required })) };
 }
 function bootCampLessons(moduleId) { return db.prepare('SELECT * FROM bootcamp_lessons WHERE module_id = ? ORDER BY idx ASC').all(moduleId); }
+function supportedBootCampVideo(videoUrl) {
+  try {
+    const url = new URL(videoUrl);
+    if (!['http:', 'https:'].includes(url.protocol)) return false;
+    const host = url.hostname.toLowerCase().replace(/^www\./, '');
+    if (host === 'youtube.com' || host === 'youtube-nocookie.com' || host === 'm.youtube.com') {
+      const id = url.searchParams.get('v') || url.pathname.match(/^\/(?:embed|shorts|live)\/([^/]+)/)?.[1];
+      return !!id && /^[\w-]{11}$/.test(id);
+    }
+    if (host === 'youtu.be') return !!url.pathname.match(/^\/([\w-]{11})\/?$/);
+    if (host === 'loom.com') return !!url.pathname.match(/^\/(?:share|embed)\/[\w-]+\/?$/);
+    if (host === 'vimeo.com' || host === 'player.vimeo.com') return !!url.pathname.match(/^\/(?:video\/)?\d+(?:\/[\w-]+)?\/?$/);
+  } catch {}
+  return false;
+}
+function isGoogleDriveVideo(videoUrl) {
+  try {
+    const url = new URL(videoUrl);
+    if (!['http:', 'https:'].includes(url.protocol) || !['drive.google.com', 'www.drive.google.com'].includes(url.hostname.toLowerCase())) return false;
+    const id = url.pathname.match(/^\/file\/d\/([\w-]+)/)?.[1] || url.searchParams.get('id');
+    return !!id && /^[\w-]+$/.test(id);
+  } catch {}
+  return false;
+}
 function bootCampDoneIds(agentId) { return db.prepare('SELECT lesson_id FROM bootcamp_completions WHERE agent_id = ?').all(agentId).map(row => row.lesson_id); }
 function bootCampWatchedIds(agentId) { return db.prepare('SELECT lesson_id FROM bootcamp_video_watches WHERE agent_id = ?').all(agentId).map(row => row.lesson_id); }
+function bootCampVideoProgress(agentId, lessonId, watched) {
+  if (watched) return { watched: true, watchedPercent: 100, position: 0, duration: null };
+  const progress = db.prepare('SELECT watched_ranges, duration_seconds, last_position FROM bootcamp_video_progress WHERE agent_id = ? AND lesson_id = ?').get(agentId, lessonId);
+  if (!progress || !progress.duration_seconds) return { watched: false, watchedPercent: 0, position: 0, furthest: 0, duration: null };
+  const ranges = JSON.parse(progress.watched_ranges);
+  const watchedSeconds = ranges.reduce((total, [start, end]) => total + Math.max(0, end - start), 0);
+  return {
+    watched: false,
+    watchedPercent: Math.min(99, Math.floor((watchedSeconds / progress.duration_seconds) * 100)),
+    position: progress.last_position,
+    furthest: ranges.reduce((furthest, [, end]) => Math.max(furthest, end), 0),
+    duration: progress.duration_seconds
+  };
+}
 function bootCampResourceDoneIds(agentId) { return db.prepare('SELECT lesson_id FROM bootcamp_resource_completions WHERE agent_id = ?').all(agentId).map(row => row.lesson_id); }
 function bootCampContractDoneIds(agentId) { return db.prepare('SELECT lesson_id FROM bootcamp_contract_completions WHERE agent_id = ?').all(agentId).map(row => row.lesson_id); }
+function bootCampLessonLocked(agentId, lesson) {
+  const done = bootCampDoneIds(agentId);
+  if (done.includes(lesson.id)) return false;
+  const lessons = bootCampLessons(lesson.module_id);
+  const index = lessons.findIndex(item => item.id === lesson.id);
+  return lessons.slice(0, Math.max(0, index)).some(item => !done.includes(item.id));
+}
+const LESSON_LOCKED_ERROR = 'Complete the previous lesson first.';
 function serializeBootCamp(agentId) {
   const done = bootCampDoneIds(agentId);
   const watched = bootCampWatchedIds(agentId);
   const resourcesDone = bootCampResourceDoneIds(agentId);
   const contractsDone = bootCampContractDoneIds(agentId);
   const modules = db.prepare('SELECT * FROM bootcamp_modules ORDER BY idx ASC').all().map(module => {
-    const lessons = bootCampLessons(module.id).map(lesson => ({ id: lesson.id, title: lesson.title, kind: lesson.kind, instructions: lesson.instructions, resourceUrl: lesson.resource_url, resourceRequired: !!lesson.resource_required, resourceCompleted: resourcesDone.includes(lesson.id), contractUrl: lesson.contract_url, contractRequired: !!lesson.contract_required, contractCompleted: contractsDone.includes(lesson.id), videoUrl: lesson.video_url, required: !!lesson.required, done: done.includes(lesson.id), watched: watched.includes(lesson.id) }));
+    const lessons = bootCampLessons(module.id).map(lesson => ({ id: lesson.id, title: lesson.title, kind: lesson.kind, instructions: lesson.instructions, resourceUrl: lesson.resource_url, resourceRequired: !!lesson.resource_required, resourceCompleted: resourcesDone.includes(lesson.id), contractUrl: lesson.contract_url, contractRequired: !!lesson.contract_required, contractCompleted: contractsDone.includes(lesson.id), videoUrl: lesson.video_url, videoProgress: bootCampVideoProgress(agentId, lesson.id, watched.includes(lesson.id)), required: !!lesson.required, done: done.includes(lesson.id), watched: watched.includes(lesson.id) }));
+    lessons.forEach((lesson, lessonIndex) => { lesson.locked = !lesson.done && lessons.slice(0, lessonIndex).some(item => !item.done); });
     const complete = lessons.filter(lesson => lesson.required).every(lesson => lesson.done);
     return { id: module.id, idx: module.idx, title: module.title, description: module.description, lessons, complete };
   });
@@ -453,6 +510,7 @@ const server = http.createServer(async (req, res) => {
       lessons.forEach(lesson => {
         db.prepare('DELETE FROM bootcamp_completions WHERE lesson_id = ?').run(lesson.id);
         db.prepare('DELETE FROM bootcamp_video_watches WHERE lesson_id = ?').run(lesson.id);
+        db.prepare('DELETE FROM bootcamp_video_progress WHERE lesson_id = ?').run(lesson.id);
         db.prepare('DELETE FROM bootcamp_resource_completions WHERE lesson_id = ?').run(lesson.id);
         db.prepare('DELETE FROM bootcamp_contract_completions WHERE lesson_id = ?').run(lesson.id);
       });
@@ -493,9 +551,9 @@ const server = http.createServer(async (req, res) => {
       const description = String(body.description !== undefined ? body.description : lesson.instructions).trim();
       const videoUrl = String(body.videoUrl || '').trim();
       const resourceUrl = String(body.resourceUrl || '').trim();
-      const resourceRequired = !!body.resourceRequired && !!resourceUrl;
+      const resourceRequired = !!body.resourceRequired;
       const contractUrl = String(body.contractUrl || '').trim();
-      const contractRequired = !!body.contractRequired && !!contractUrl;
+      const contractRequired = !!body.contractRequired;
       if (videoUrl) {
         try { const parsed = new URL(videoUrl); if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error(); }
         catch { return sendJson(res, 400, { error: 'Video URL must use HTTP or HTTPS.' }); }
@@ -510,6 +568,7 @@ const server = http.createServer(async (req, res) => {
       }
       db.prepare('UPDATE bootcamp_lessons SET title = ?, instructions = ?, video_url = ?, resource_url = ?, resource_required = ?, contract_url = ?, contract_required = ?, required = ? WHERE id = ?').run(title, description, videoUrl, resourceUrl, resourceRequired ? 1 : 0, contractUrl, contractRequired ? 1 : 0, body.required === false ? 0 : 1, lesson.id);
       db.prepare('DELETE FROM bootcamp_video_watches WHERE lesson_id = ?').run(lesson.id);
+      db.prepare('DELETE FROM bootcamp_video_progress WHERE lesson_id = ?').run(lesson.id);
       db.prepare('DELETE FROM bootcamp_resource_completions WHERE lesson_id = ?').run(lesson.id);
       db.prepare('DELETE FROM bootcamp_contract_completions WHERE lesson_id = ?').run(lesson.id);
       db.prepare('DELETE FROM bootcamp_completions WHERE lesson_id = ?').run(lesson.id);
@@ -520,7 +579,7 @@ const server = http.createServer(async (req, res) => {
       if (!requireOwner()) return;
       const lesson = db.prepare('SELECT * FROM bootcamp_lessons WHERE id = ?').get(bootCampLessonDeleteMatch[1]);
       if (!lesson) return sendJson(res, 404, { error: 'Boot Camp lesson not found.' });
-      ['bootcamp_completions', 'bootcamp_video_watches', 'bootcamp_resource_completions', 'bootcamp_contract_completions'].forEach(table => db.prepare(`DELETE FROM ${table} WHERE lesson_id = ?`).run(lesson.id));
+      ['bootcamp_completions', 'bootcamp_video_watches', 'bootcamp_video_progress', 'bootcamp_resource_completions', 'bootcamp_contract_completions'].forEach(table => db.prepare(`DELETE FROM ${table} WHERE lesson_id = ?`).run(lesson.id));
       db.prepare('DELETE FROM bootcamp_lessons WHERE id = ?').run(lesson.id);
       db.prepare('UPDATE bootcamp_lessons SET idx = idx - 1 WHERE module_id = ? AND idx > ?').run(lesson.module_id, lesson.idx);
       return sendJson(res, 200, { ok: true });
@@ -537,19 +596,58 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ---- Boot Camp self-service ----
-    const bootCampWatchMatch = pathname.match(/^\/api\/me\/bootcamp\/lessons\/([^/]+)\/watch$/);
-    if (bootCampWatchMatch && req.method === 'POST') {
+    const bootCampVideoProgressMatch = pathname.match(/^\/api\/me\/bootcamp\/lessons\/([^/]+)\/video-progress$/);
+    if (bootCampVideoProgressMatch && req.method === 'POST') {
       if (!requireAuth()) return;
+      if (session.account.role !== 'agent') return sendJson(res, 403, { error: 'Agent access required.' });
       const agentRow = db.prepare('SELECT * FROM agents WHERE account_id = ?').get(session.account.id);
       if (!agentRow) return sendJson(res, 404, { error: 'No agent record found.' });
-      const lesson = db.prepare('SELECT l.*, m.idx AS module_idx FROM bootcamp_lessons l JOIN bootcamp_modules m ON m.id = l.module_id WHERE l.id = ?').get(bootCampWatchMatch[1]);
+      const lesson = db.prepare('SELECT l.*, m.idx AS module_idx FROM bootcamp_lessons l JOIN bootcamp_modules m ON m.id = l.module_id WHERE l.id = ?').get(bootCampVideoProgressMatch[1]);
       if (!lesson) return sendJson(res, 404, { error: 'Boot Camp lesson not found.' });
       const modules = db.prepare('SELECT * FROM bootcamp_modules ORDER BY idx ASC').all();
       const previousModule = modules.find(module => module.idx === lesson.module_idx - 1);
       if (previousModule && !bootCampLessons(previousModule.id).filter(item => item.required).every(item => bootCampDoneIds(agentRow.id).includes(item.id))) return sendJson(res, 409, { error: 'Complete the previous Boot Camp module first.' });
+      if (bootCampLessonLocked(agentRow.id, lesson)) return sendJson(res, 409, { error: LESSON_LOCKED_ERROR });
       if (!lesson.video_url) return sendJson(res, 400, { error: 'This lesson has no video.' });
-      db.prepare('INSERT OR REPLACE INTO bootcamp_video_watches (agent_id, lesson_id, watched_at) VALUES (?,?,?)').run(agentRow.id, lesson.id, new Date().toISOString());
-      return sendJson(res, 200, { bootcamp: serializeBootCamp(agentRow.id) });
+      if (!supportedBootCampVideo(lesson.video_url)) return sendJson(res, 400, { error: 'This video host does not support tracked playback.' });
+      const currentTime = Number(body.currentTime);
+      const duration = Number(body.duration);
+      if (!Number.isFinite(currentTime) || !Number.isFinite(duration) || duration <= 0 || duration > 86400 || currentTime < 0 || currentTime > duration || typeof body.playing !== 'boolean') return sendJson(res, 400, { error: 'Invalid video playback checkpoint.' });
+      if (db.prepare('SELECT 1 FROM bootcamp_video_watches WHERE agent_id = ? AND lesson_id = ?').get(agentRow.id, lesson.id)) {
+        return sendJson(res, 200, { watched: true, progress: { watched: true, watchedPercent: 100, position: currentTime, duration } });
+      }
+      const previous = db.prepare('SELECT * FROM bootcamp_video_progress WHERE agent_id = ? AND lesson_id = ?').get(agentRow.id, lesson.id);
+      const now = Date.now();
+      if (previous && previous.duration_seconds && Math.abs(previous.duration_seconds - duration) > Math.max(2, previous.duration_seconds * 0.01)) return sendJson(res, 409, { error: 'The video duration changed. Reload the lesson to continue.' });
+      if (!previous && currentTime > 1.5) return sendJson(res, 409, { error: 'Video playback must start at the beginning.' });
+      const ranges = previous ? JSON.parse(previous.watched_ranges) : [];
+      let lastPosition = previous ? previous.last_position : 0;
+      const elapsed = previous ? (now - previous.checkpoint_at) / 1000 : 0;
+      const movement = currentTime - lastPosition;
+      if (previous && movement > 0 && previous.last_playing && elapsed >= 0 && elapsed <= 12 && movement <= elapsed * 1.25 + 0.75) {
+        ranges.push([lastPosition, currentTime]);
+        ranges.sort((a, b) => a[0] - b[0]);
+        const merged = [];
+        for (const range of ranges) {
+          const last = merged[merged.length - 1];
+          if (last && range[0] <= last[1] + 0.25) last[1] = Math.max(last[1], range[1]);
+          else merged.push([...range]);
+        }
+        ranges.splice(0, ranges.length, ...merged);
+        lastPosition = currentTime;
+      } else if (movement <= 0) {
+        lastPosition = currentTime;
+      } else if (previous && (elapsed < 0 || elapsed > 12 || movement > elapsed * 1.25 + 0.75)) {
+        lastPosition = previous.last_position;
+      }
+      db.prepare(`INSERT INTO bootcamp_video_progress (agent_id, lesson_id, watched_ranges, duration_seconds, last_position, checkpoint_at, last_playing)
+        VALUES (?,?,?,?,?,?,?) ON CONFLICT(agent_id, lesson_id) DO UPDATE SET watched_ranges = excluded.watched_ranges,
+        duration_seconds = excluded.duration_seconds, last_position = excluded.last_position, checkpoint_at = excluded.checkpoint_at,
+        last_playing = excluded.last_playing`).run(agentRow.id, lesson.id, JSON.stringify(ranges), previous?.duration_seconds || duration, lastPosition, now, body.playing ? 1 : 0);
+      const watchedSeconds = ranges.reduce((total, [start, end]) => total + Math.max(0, end - start), 0);
+      if (watchedSeconds >= duration * 0.9) db.prepare('INSERT OR IGNORE INTO bootcamp_video_watches (agent_id, lesson_id, watched_at) VALUES (?,?,?)').run(agentRow.id, lesson.id, new Date().toISOString());
+      const watched = !!db.prepare('SELECT 1 FROM bootcamp_video_watches WHERE agent_id = ? AND lesson_id = ?').get(agentRow.id, lesson.id);
+      return sendJson(res, 200, { watched, progress: bootCampVideoProgress(agentRow.id, lesson.id, watched) });
     }
     const bootCampResourceMatch = pathname.match(/^\/api\/me\/bootcamp\/lessons\/([^/]+)\/resource-complete$/);
     if (bootCampResourceMatch && req.method === 'POST') {
@@ -561,6 +659,7 @@ const server = http.createServer(async (req, res) => {
       const modules = db.prepare('SELECT * FROM bootcamp_modules ORDER BY idx ASC').all();
       const previousModule = modules.find(module => module.idx === lesson.module_idx - 1);
       if (previousModule && !bootCampLessons(previousModule.id).filter(item => item.required).every(item => bootCampDoneIds(agentRow.id).includes(item.id))) return sendJson(res, 409, { error: 'Complete the previous Boot Camp module first.' });
+      if (bootCampLessonLocked(agentRow.id, lesson)) return sendJson(res, 409, { error: LESSON_LOCKED_ERROR });
       if (!lesson.resource_url) return sendJson(res, 400, { error: 'This lesson has no resource.' });
       db.prepare('INSERT OR REPLACE INTO bootcamp_resource_completions (agent_id, lesson_id, completed_at) VALUES (?,?,?)').run(agentRow.id, lesson.id, new Date().toISOString());
       return sendJson(res, 200, { bootcamp: serializeBootCamp(agentRow.id) });
@@ -572,6 +671,7 @@ const server = http.createServer(async (req, res) => {
       if (!agentRow) return sendJson(res, 404, { error: 'No agent record found.' });
       const lesson = db.prepare('SELECT l.*, m.idx AS module_idx FROM bootcamp_lessons l JOIN bootcamp_modules m ON m.id = l.module_id WHERE l.id = ?').get(bootCampContractMatch[1]);
       if (!lesson) return sendJson(res, 404, { error: 'Boot Camp lesson not found.' });
+      if (bootCampLessonLocked(agentRow.id, lesson)) return sendJson(res, 409, { error: LESSON_LOCKED_ERROR });
       if (!lesson.contract_url) return sendJson(res, 400, { error: 'This lesson has no contract link.' });
       db.prepare('INSERT OR REPLACE INTO bootcamp_contract_completions (agent_id, lesson_id, completed_at) VALUES (?,?,?)').run(agentRow.id, lesson.id, new Date().toISOString());
       return sendJson(res, 200, { bootcamp: serializeBootCamp(agentRow.id) });
@@ -590,9 +690,10 @@ const server = http.createServer(async (req, res) => {
         const previousDone = bootCampDoneIds(agentRow.id);
         if (!previousLessons.every(item => previousDone.includes(item.id))) return sendJson(res, 409, { error: 'Complete the previous Boot Camp module first.' });
       }
-      if (lesson.video_url && !db.prepare('SELECT 1 FROM bootcamp_video_watches WHERE agent_id = ? AND lesson_id = ?').get(agentRow.id, lesson.id)) return sendJson(res, 409, { error: 'Watch the required video before completing this lesson.' });
-      if (lesson.resource_required && !db.prepare('SELECT 1 FROM bootcamp_resource_completions WHERE agent_id = ? AND lesson_id = ?').get(agentRow.id, lesson.id)) return sendJson(res, 409, { error: 'Complete the required resource before completing this lesson.' });
-      if (lesson.contract_required && !db.prepare('SELECT 1 FROM bootcamp_contract_completions WHERE agent_id = ? AND lesson_id = ?').get(agentRow.id, lesson.id)) return sendJson(res, 409, { error: 'Complete the required contract before completing this lesson.' });
+      if (bootCampLessonLocked(agentRow.id, lesson)) return sendJson(res, 409, { error: LESSON_LOCKED_ERROR });
+      if ((lesson.video_url && !isGoogleDriveVideo(lesson.video_url)) && !db.prepare('SELECT 1 FROM bootcamp_video_watches WHERE agent_id = ? AND lesson_id = ?').get(agentRow.id, lesson.id)) return sendJson(res, 409, { error: 'Watch the required video before completing this lesson.' });
+      if (lesson.resource_required && lesson.resource_url && !db.prepare('SELECT 1 FROM bootcamp_resource_completions WHERE agent_id = ? AND lesson_id = ?').get(agentRow.id, lesson.id)) return sendJson(res, 409, { error: 'Complete the required resource before completing this lesson.' });
+      if (lesson.contract_required && lesson.contract_url && !db.prepare('SELECT 1 FROM bootcamp_contract_completions WHERE agent_id = ? AND lesson_id = ?').get(agentRow.id, lesson.id)) return sendJson(res, 409, { error: 'Complete the required contract before completing this lesson.' });
       const existing = db.prepare('SELECT 1 FROM bootcamp_completions WHERE agent_id = ? AND lesson_id = ?').get(agentRow.id, lesson.id);
       if (existing) db.prepare('DELETE FROM bootcamp_completions WHERE agent_id = ? AND lesson_id = ?').run(agentRow.id, lesson.id);
       else db.prepare('INSERT INTO bootcamp_completions (agent_id, lesson_id, completed_at) VALUES (?,?,?)').run(agentRow.id, lesson.id, new Date().toISOString());
@@ -661,6 +762,7 @@ const server = http.createServer(async (req, res) => {
       db.prepare('DELETE FROM agent_done_tasks WHERE agent_id = ?').run(agentRow.id);
       db.prepare('DELETE FROM bootcamp_completions WHERE agent_id = ?').run(agentRow.id);
       db.prepare('DELETE FROM bootcamp_video_watches WHERE agent_id = ?').run(agentRow.id);
+      db.prepare('DELETE FROM bootcamp_video_progress WHERE agent_id = ?').run(agentRow.id);
       db.prepare('DELETE FROM bootcamp_resource_completions WHERE agent_id = ?').run(agentRow.id);
       db.prepare('DELETE FROM bootcamp_contract_completions WHERE agent_id = ?').run(agentRow.id);
       db.prepare('DELETE FROM agent_stage_history WHERE agent_id = ?').run(agentRow.id);

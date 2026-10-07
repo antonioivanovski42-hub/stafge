@@ -6,8 +6,8 @@
   const TAU = Math.PI * 2;
   const rand = (a, b) => a + Math.random() * (b - a);
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-  const CYAN = '61, 225, 255';
-  const BLUE = '57, 139, 255';
+  const CYAN = '224, 181, 97';
+  const BLUE = '171, 119, 39';
 
   function fitCanvas(canvas, maxDpr = 1.75) {
     const dpr = Math.min(window.devicePixelRatio || 1, maxDpr);
@@ -25,7 +25,7 @@
     canvas.id = 'jv-environment';
     canvas.setAttribute('aria-hidden', 'true');
     document.body.prepend(canvas);
-    let ctx, w, h, particles = [], paths = [];
+    let ctx, w, h, particles = [], paths = [], lightLayer = null, lightsAt = 0;
     const mouse = { x: 0, y: 0, tx: 0, ty: 0 };
 
     function buildPath() {
@@ -69,16 +69,26 @@
       ctx.clearRect(0, 0, w, h);
       ctx.globalCompositeOperation = 'lighter';
 
-      // drifting light
-      for (let i = 0; i < 3; i++) {
-        const cx = w * (0.5 + 0.42 * Math.sin(t * 0.00006 * (i + 1) + i * 2.1)) + mouse.x * 30 * (i + 1);
-        const cy = h * (0.45 + 0.35 * Math.cos(t * 0.00005 * (i + 2) + i));
-        const r = Math.max(w, h) * (0.32 + i * 0.07);
-        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-        g.addColorStop(0, `rgba(${i === 1 ? BLUE : CYAN}, ${i === 1 ? 0.07 : 0.045})`);
-        g.addColorStop(1, `rgba(${BLUE}, 0)`);
-        ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+      // drifting light: smooth gradients are rendered at quarter resolution and refreshed ~8x/s
+      if (!lightLayer || t - lightsAt > 120) {
+        lightsAt = t;
+        const lw = Math.max(1, Math.ceil(w / 4)), lh = Math.max(1, Math.ceil(h / 4));
+        if (!lightLayer) lightLayer = document.createElement('canvas');
+        if (lightLayer.width !== lw || lightLayer.height !== lh) { lightLayer.width = lw; lightLayer.height = lh; }
+        const lctx = lightLayer.getContext('2d');
+        lctx.clearRect(0, 0, lw, lh);
+        lctx.globalCompositeOperation = 'lighter';
+        for (let i = 0; i < 3; i++) {
+          const cx = (w * (0.5 + 0.42 * Math.sin(t * 0.00006 * (i + 1) + i * 2.1)) + mouse.x * 30 * (i + 1)) / 4;
+          const cy = (h * (0.45 + 0.35 * Math.cos(t * 0.00005 * (i + 2) + i))) / 4;
+          const r = Math.max(w, h) * (0.32 + i * 0.07) / 4;
+          const g = lctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+          g.addColorStop(0, `rgba(${i === 1 ? BLUE : CYAN}, ${i === 1 ? 0.07 : 0.045})`);
+          g.addColorStop(1, `rgba(${BLUE}, 0)`);
+          lctx.fillStyle = g; lctx.fillRect(0, 0, lw, lh);
+        }
       }
+      ctx.drawImage(lightLayer, 0, 0, w, h);
 
       // perspective floor
       const horizon = h * 0.56, vx = w / 2 + mouse.x * 40;
@@ -127,11 +137,14 @@
     }
 
     let last = performance.now(), running = false;
+    // The ambient layer drifts slowly, so ~30fps is visually identical; it is also skipped while the opaque entry screen covers it.
     function loop(now) {
       if (!running) return;
+      requestAnimationFrame(loop);
+      if (now - last < 30) return;
+      if (document.getElementById('jv-intro') && !document.body.classList.contains('jv-entered')) { last = now; return; }
       const dt = Math.min(now - last, 64); last = now;
       draw(now, dt);
-      requestAnimationFrame(loop);
     }
     function setRunning(on) { if (on && !running && !reduceMotion) { running = true; last = performance.now(); requestAnimationFrame(loop); } else if (!on) running = false; }
     window.addEventListener('resize', resize);

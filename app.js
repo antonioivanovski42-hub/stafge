@@ -107,24 +107,291 @@ function recruitModal() {
 }
 
 function bootCampProgress(bootcamp) { return bootcamp.totalLessons ? Math.round((bootcamp.completedLessons / bootcamp.totalLessons) * 100) : 0; }
-function videoEmbedUrl(videoUrl) {
+function videoEmbedInfo(videoUrl, lessonId) {
   try {
     const url = new URL(videoUrl);
     const host = url.hostname.toLowerCase().replace(/^www\./, '');
-    if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
-      const id = url.searchParams.get('v');
-      return id ? `https://www.youtube.com/embed/${encodeURIComponent(id)}` : '';
+    if (!['http:', 'https:'].includes(url.protocol)) return null;
+    if (host === 'youtube.com' || host === 'youtube-nocookie.com' || host === 'm.youtube.com') {
+      const id = url.searchParams.get('v') || url.pathname.match(/^\/(?:embed|shorts|live)\/([^/]+)/)?.[1];
+      if (!id || !/^[\w-]{11}$/.test(id)) return null;
+      return { provider: 'youtube', id, src: `https://www.youtube.com/embed/${encodeURIComponent(id)}?enablejsapi=1&origin=${encodeURIComponent(location.origin)}` };
     }
-    if (host === 'youtu.be') return `https://www.youtube.com/embed/${encodeURIComponent(url.pathname.slice(1))}`;
-    if (host === 'loom.com') { const id = url.pathname.match(/^\/share\/([^/]+)/)?.[1]; return id ? `https://www.loom.com/embed/${encodeURIComponent(id)}` : ''; }
-    if (host === 'vimeo.com') { const id = url.pathname.match(/^\/(\d+)/)?.[1]; return id ? `https://player.vimeo.com/video/${id}` : ''; }
+    if (host === 'youtu.be') {
+      const id = url.pathname.match(/^\/([^/]+)/)?.[1];
+      return id && /^[\w-]{11}$/.test(id) ? { provider: 'youtube', id, src: `https://www.youtube.com/embed/${encodeURIComponent(id)}?enablejsapi=1&origin=${encodeURIComponent(location.origin)}` } : null;
+    }
+    if (host === 'loom.com') {
+      const id = url.pathname.match(/^\/(?:share|embed)\/([^/]+)/)?.[1];
+      return id && /^[\w-]+$/.test(id) ? { provider: 'loom', id, src: `https://www.loom.com/embed/${encodeURIComponent(id)}` } : null;
+    }
+    if (host === 'vimeo.com' || host === 'player.vimeo.com') {
+      const id = url.pathname.match(/^\/(?:video\/)?(\d+)/)?.[1];
+      if (!id) return null;
+      const privacyHash = url.searchParams.get('h') || url.pathname.match(/^\/\d+\/([\w-]+)/)?.[1];
+      const query = new URLSearchParams({ api: '1', player_id: `video-${lessonId}` });
+      if (privacyHash) query.set('h', privacyHash);
+      return { provider: 'vimeo', id, src: `https://player.vimeo.com/video/${id}?${query}` };
+    }
+    if (host === 'drive.google.com') {
+      const id = url.pathname.match(/^\/file\/d\/([\w-]+)/)?.[1] || url.searchParams.get('id');
+      return id && /^[\w-]+$/.test(id) ? { provider: 'google-drive', id, src: `https://drive.google.com/file/d/${encodeURIComponent(id)}/preview` } : null;
+    }
   } catch {}
-  return '';
+  return null;
+}
+let youtubeApiPromise;
+let vimeoApiPromise;
+let bootCampVideoCleanup = [];
+let activeBootCampLesson = null;
+let lastRenderedBootCampHtml = '';
+function loadYouTubeApi() {
+  if (window.YT?.Player) return Promise.resolve(window.YT);
+  if (!youtubeApiPromise) youtubeApiPromise = new Promise((resolve, reject) => {
+    const previous = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => { previous?.(); resolve(window.YT); };
+    const script = document.createElement('script');
+    script.src = 'https://www.youtube.com/iframe_api';
+    script.onerror = () => reject(new Error('YouTube player API could not be loaded.'));
+    document.head.append(script);
+  });
+  return youtubeApiPromise;
+}
+function loadVimeoApi() {
+  if (window.Vimeo?.Player) return Promise.resolve(window.Vimeo);
+  if (!vimeoApiPromise) vimeoApiPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://player.vimeo.com/api/player.js';
+    script.onload = () => window.Vimeo?.Player ? resolve(window.Vimeo) : reject(new Error('Vimeo player API is unavailable.'));
+    script.onerror = () => reject(new Error('Vimeo player API could not be loaded.'));
+    document.head.append(script);
+  });
+  return vimeoApiPromise;
+}
+function bootCampVideoStatus(frame, text) {
+  const status = document.querySelector(`[data-video-status="${CSS.escape(frame.dataset.lessonId)}"]`);
+  if (status) status.textContent = text;
+}
+function bootCampVideoFallback(frame, message) {
+  bootCampVideoStatus(frame, message);
+  const link = document.createElement('a');
+  link.className = 'loom-link';
+  link.href = frame.dataset.originalUrl;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = 'Open Video';
+  frame.insertAdjacentElement('afterend', link);
+}
+function initBootCampVideoPlayer(frame) {
+  const lessonId = frame.dataset.lessonId;
+  const cleanups = [];
+  let watched = frame.dataset.videoWatched === 'true';
+  let duration = 0;
+  let playing = false;
+  let currentPosition = Number(frame.dataset.videoPosition) || 0;
+  let furthestPosition = Number(frame.dataset.videoFurthest) || currentPosition;
+  let lastSampleAt = performance.now();
+  let lastCheckpointAt = 0;
+  let checkpointQueue = Promise.resolve();
+  let player;
+  let pollTimer;
+  let seekTo = () => {};
+  const statusText = progress => progress.watched
+    ? '✓ Training Completed'
+    : `Video Training — ${progress.watchedPercent}% watched`;
+  const applyProgress = progress => {
+    if (!progress) return;
+    watched = progress.watched;
+    currentPosition = Number(progress.position) || 0;
+    furthestPosition = Math.max(currentPosition, Number(progress.furthest) || 0);
+    bootCampVideoStatus(frame, statusText(progress));
+    const check = document.querySelector(`[data-video-check="${CSS.escape(lessonId)}"]`);
+    if (check) check.disabled = !watched || check.dataset.moduleUnlocked !== 'true' || check.dataset.requirementsReady !== 'true' || check.dataset.alreadyDone === 'true';
+  };
+  const save = (position, videoDuration, isPlaying, force = false) => {
+    if (watched || !Number.isFinite(position) || !Number.isFinite(videoDuration) || videoDuration <= 0) return;
+    const now = performance.now();
+    if (!force && now - lastCheckpointAt < 3000) return;
+    lastCheckpointAt = now;
+    checkpointQueue = checkpointQueue.then(async () => {
+      const response = await api(`/api/me/bootcamp/lessons/${encodeURIComponent(lessonId)}/video-progress`, {
+        method: 'POST',
+        body: JSON.stringify({ currentTime: position, duration: videoDuration, playing: isPlaying }),
+        keepalive: force === 'pagehide'
+      });
+      if (!frame.isConnected) return;
+      applyProgress(response.progress);
+      if (!response.watched && position > response.progress.position + 1.5) seekTo(response.progress.position);
+    }).catch(error => {
+      if (frame.isConnected) bootCampVideoStatus(frame, `Video progress could not be saved: ${error.message}`);
+    });
+  };
+  const sample = (position, videoDuration) => {
+    if (!Number.isFinite(position) || !Number.isFinite(videoDuration) || videoDuration <= 0) return;
+    duration = videoDuration;
+    const now = performance.now();
+    const elapsed = Math.min(2, Math.max(0.1, (now - lastSampleAt) / 1000));
+    if (!watched && position > furthestPosition + elapsed * 1.7 + 1.5) {
+      seekTo(furthestPosition);
+      position = furthestPosition;
+    }
+    currentPosition = Math.max(0, Math.min(position, videoDuration));
+    furthestPosition = Math.max(furthestPosition, currentPosition);
+    lastSampleAt = now;
+    save(currentPosition, videoDuration, playing);
+  };
+  const pauseAndSave = (position, videoDuration) => {
+    playing = false;
+    sample(position, videoDuration);
+    save(currentPosition, videoDuration, false, true);
+  };
+  const onPageHide = () => save(currentPosition, duration, false, 'pagehide');
+  window.addEventListener('pagehide', onPageHide);
+  cleanups.push(() => window.removeEventListener('pagehide', onPageHide));
+  cleanups.push(() => save(currentPosition, duration, false, true));
+  frame.__unload = () => cleanups.splice(0).forEach(cleanup => cleanup());
+  bootCampVideoCleanup.push(() => frame.__unload?.());
+  const startAtSavedPosition = async (videoDuration) => {
+    duration = videoDuration;
+    if (currentPosition > 0) await seekTo(currentPosition);
+    lastSampleAt = performance.now();
+    save(currentPosition, duration, false, true);
+  };
+
+  if (frame.dataset.provider === 'youtube') {
+    loadYouTubeApi().then(YT => {
+      if (!frame.isConnected) return;
+      player = new YT.Player(frame, {
+        events: {
+          onReady: async event => {
+            player = event.target;
+            duration = player.getDuration();
+            seekTo = position => player.seekTo(Math.max(0, position), true);
+            await startAtSavedPosition(duration);
+            player.setPlaybackRate(1);
+            pollTimer = setInterval(() => {
+              if (!frame.isConnected) { clearInterval(pollTimer); return; }
+              if (!player?.getCurrentTime) return;
+              const videoDuration = player.getDuration();
+              if (videoDuration > 0) sample(player.getCurrentTime(), videoDuration);
+            }, 500);
+            cleanups.push(() => { clearInterval(pollTimer); player?.destroy(); });
+          },
+          onStateChange: event => {
+            if (event.data === YT.PlayerState.PLAYING) { playing = true; save(player.getCurrentTime(), player.getDuration(), true, true); }
+            else if (event.data === YT.PlayerState.PAUSED || event.data === YT.PlayerState.ENDED) pauseAndSave(player.getCurrentTime(), player.getDuration());
+          },
+          onPlaybackRateChange: event => { if (!watched && event.data !== 1) player.setPlaybackRate(1); }
+        }
+      });
+    }).catch(error => bootCampVideoFallback(frame, `${error.message} `));
+    return;
+  }
+  if (frame.dataset.provider === 'vimeo') {
+    loadVimeoApi().then(async Vimeo => {
+      if (!frame.isConnected) return;
+      player = new Vimeo.Player(frame);
+      duration = await player.getDuration();
+      seekTo = position => player.setCurrentTime(Math.max(0, position)).catch(error => bootCampVideoStatus(frame, `Could not restore video position: ${error.message}`));
+      await startAtSavedPosition(duration);
+      player.on('play', () => { playing = true; player.getCurrentTime().then(time => save(time, duration, true, true)); });
+      player.on('pause', event => pauseAndSave(event.seconds, event.duration));
+      player.on('ended', event => pauseAndSave(event.seconds, event.duration));
+      player.on('timeupdate', event => sample(event.seconds, event.duration));
+      player.on('seeking', event => { if (!watched && event.seconds > furthestPosition + 1.5) seekTo(furthestPosition); });
+      player.on('playbackratechange', event => { if (!watched && event.playbackRate !== 1) player.setPlaybackRate(1); });
+      cleanups.push(() => { player.destroy().catch(error => console.error('Could not dispose Vimeo player:', error)); });
+    }).catch(error => bootCampVideoFallback(frame, `${error.message} `));
+    return;
+  }
+
+  if (frame.dataset.provider === 'loom') {
+    let ready = false;
+    let fallbackTimer = setTimeout(() => {
+      if (!ready && frame.isConnected) bootCampVideoFallback(frame, 'Loom playback tracking is unavailable. ');
+    }, 10000);
+    const sendLoom = (method, value) => frame.contentWindow.postMessage({ method, value, context: 'player.js' }, 'https://www.loom.com');
+    seekTo = position => sendLoom('setCurrentTime', Math.max(0, position));
+    const onMessage = event => {
+      if (event.origin !== 'https://www.loom.com' || event.source !== frame.contentWindow) return;
+      let message = event.data;
+      if (typeof message === 'string') {
+        try { message = JSON.parse(message); } catch { return; }
+      }
+      if (!message || message.context !== 'player.js') return;
+      if (message.event === 'ready') {
+        ready = true;
+        clearTimeout(fallbackTimer);
+        ['play', 'pause', 'ended', 'timeupdate'].forEach(name => sendLoom('addEventListener', name));
+        if (currentPosition > 0) sendLoom('setCurrentTime', currentPosition);
+        return;
+      }
+      if (message.event === 'play') { playing = true; save(Number(message.value?.currentTime), Number(message.value?.duration), true, true); }
+      const value = message.value || {};
+      const time = Number(value.currentTime ?? value.seconds);
+      const length = Number(value.duration);
+      if (message.event === 'timeupdate') { playing = true; sample(time, length); }
+      if (message.event === 'pause' || message.event === 'ended') pauseAndSave(time, length);
+    };
+    window.addEventListener('message', onMessage);
+    cleanups.push(() => { clearTimeout(fallbackTimer); window.removeEventListener('message', onMessage); });
+    frame.addEventListener('load', () => {
+      ['ready', 'play', 'pause', 'ended', 'timeupdate'].forEach(name => sendLoom('addEventListener', name));
+    }, { once: true });
+    return;
+  }
+}
+function initBootCampVideoPlayers() {
+  bootCampVideoCleanup.forEach(cleanup => cleanup());
+  bootCampVideoCleanup = [];
+  if (view !== 'bootcamp') activeBootCampLesson = null;
+  if (me?.role !== 'agent' || view !== 'bootcamp') return;
+  document.querySelectorAll('[data-bootcamp-player]').forEach(initBootCampVideoPlayer);
+}
+function bootCampVideoSlot(lesson, embed, playerAttrs, locked) {
+  const iframe = `<iframe ${playerAttrs} src="${embed.src}" title="${escapeHtml(lesson.title)} video" loading="lazy" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`;
+  const active = !locked && activeBootCampLesson === lesson.id;
+  const thumbnail = embed.provider === 'youtube' ? `<img src="https://i.ytimg.com/vi/${encodeURIComponent(embed.id)}/hqdefault.jpg" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : '';
+  return `<div class="bootcamp-video-slot ${active ? 'open' : ''}" data-lesson-slot="${escapeHtml(lesson.id)}"><div class="bootcamp-video-placeholder" ${active ? 'hidden' : ''}>${thumbnail}<button type="button" class="row-action" data-bootcamp-load-video="${escapeHtml(lesson.id)}" ${locked ? 'disabled' : ''}>${locked ? '🔒 Locked' : '▶ Play video'}</button></div><template>${iframe}</template>${active ? iframe : ''}</div>`;
+}
+function openBootCampVideo(lessonId) {
+  const slot = document.querySelector(`[data-lesson-slot="${CSS.escape(lessonId)}"]`);
+  const template = slot?.querySelector('template');
+  if (!template || slot.classList.contains('open')) return;
+  document.querySelectorAll('.bootcamp-video-slot.open').forEach(unloadBootCampVideo);
+  const frame = template.content.firstElementChild.cloneNode(true);
+  template.after(frame);
+  slot.querySelector('.bootcamp-video-placeholder').hidden = true;
+  slot.classList.add('open');
+  activeBootCampLesson = lessonId;
+  if (me?.role === 'agent' && frame.hasAttribute('data-bootcamp-player')) initBootCampVideoPlayer(frame);
+}
+function unloadBootCampVideo(slot) {
+  const frame = slot.querySelector('iframe');
+  frame?.__unload?.();
+  frame?.remove();
+  slot.querySelector('.bootcamp-video-placeholder').hidden = false;
+  slot.classList.remove('open');
+  if (activeBootCampLesson === slot.dataset.lessonSlot) activeBootCampLesson = null;
 }
 function bootCampModule(module, ownerViewing = false) {
   const state = module.complete ? 'complete' : module.unlocked ? 'current' : 'locked';
   const moduleControls = ownerViewing ? `<form class="bootcamp-module-form" data-bootcamp-module-form="${module.id}"><input name="title" value="${escapeHtml(module.title)}" required><input name="description" value="${escapeHtml(module.description)}" placeholder="Module description"><button class="row-action">Save module</button><button class="row-action danger" type="button" data-bootcamp-delete-module="${module.id}">Delete</button><button class="row-action" type="button" data-bootcamp-move-module="${module.id}" data-direction="up">↑</button><button class="row-action" type="button" data-bootcamp-move-module="${module.id}" data-direction="down">↓</button></form>` : '';
-  const lessons = module.lessons.map((lesson, index) => { const embedUrl = videoEmbedUrl(lesson.videoUrl); const resourceBlocked = lesson.resourceRequired && !lesson.resourceCompleted; const contractBlocked = lesson.contractRequired && !lesson.contractCompleted; return `<div class="bootcamp-lesson ${lesson.done ? 'done' : ''}"><button class="check" ${ownerViewing || !module.unlocked || (lesson.videoUrl && !lesson.watched) || resourceBlocked || contractBlocked ? 'disabled' : ''} data-bootcamp-complete="${lesson.id}">${lesson.done ? '✓' : ''}</button><div class="bootcamp-lesson-content"><b>${escapeHtml(lesson.title)}</b><span>${escapeHtml(lesson.instructions)}</span>${lesson.videoUrl ? `<div class="bootcamp-video">${embedUrl ? `<iframe src="${embedUrl}" title="${escapeHtml(lesson.title)} video" loading="lazy" allow="autoplay; fullscreen" allowfullscreen></iframe>` : `<a class="loom-link" href="${escapeHtml(lesson.videoUrl)}" target="_blank" rel="noopener">Open video</a>`}${!ownerViewing && module.unlocked ? lesson.watched ? '<span class="video-watched">Video watched</span>' : '<button class="row-action" data-bootcamp-watch="' + lesson.id + '">Mark video watched</button>' : ''}</div>` : ''}${lesson.resourceUrl ? `<div class="bootcamp-resource"><a class="loom-link" href="${escapeHtml(lesson.resourceUrl)}" target="_blank" rel="noopener">Open resource</a>${!ownerViewing && module.unlocked ? lesson.resourceCompleted ? '<span class="resource-complete">Resource completed</span>' : '<button class="row-action" data-bootcamp-resource="' + lesson.id + '">Mark resource complete</button>' : ''}</div>` : ''}${lesson.contractUrl ? `<div class="bootcamp-resource"><a class="loom-link" href="${escapeHtml(lesson.contractUrl)}" target="_blank" rel="noopener">Open contract/signature</a>${!ownerViewing && module.unlocked ? lesson.contractCompleted ? '<span class="resource-complete">Contract completed</span>' : '<button class="row-action" data-bootcamp-contract="' + lesson.id + '">Mark contract complete</button>' : ''}</div>` : ''}${ownerViewing ? `<form class="bootcamp-video-form" data-bootcamp-lesson-form="${lesson.id}"><input name="title" value="${escapeHtml(lesson.title)}" required><input name="description" value="${escapeHtml(lesson.instructions)}" placeholder="Description"><input name="videoUrl" type="url" value="${escapeHtml(lesson.videoUrl || '')}" placeholder="Optional video URL"><input name="resourceUrl" type="url" value="${escapeHtml(lesson.resourceUrl || '')}" placeholder="Optional document/resource URL"><input name="contractUrl" type="url" value="${escapeHtml(lesson.contractUrl || '')}" placeholder="Optional contract/signature URL"><label class="check-label"><input name="required" type="checkbox" ${lesson.required ? 'checked' : ''}> Required lesson</label><label class="check-label"><input name="resourceRequired" type="checkbox" ${lesson.resourceRequired ? 'checked' : ''}> Required resource</label><label class="check-label"><input name="contractRequired" type="checkbox" ${lesson.contractRequired ? 'checked' : ''}> Required contract</label><button class="row-action">Save lesson</button><button class="row-action danger" type="button" data-bootcamp-delete-lesson="${lesson.id}">Delete</button><button class="row-action" type="button" data-bootcamp-move-lesson="${lesson.id}" data-direction="up" ${index === 0 ? 'disabled' : ''}>↑</button><button class="row-action" type="button" data-bootcamp-move-lesson="${lesson.id}" data-direction="down" ${index === module.lessons.length - 1 ? 'disabled' : ''}>↓</button></form>` : ''}</div></div>`; }).join('');
+  const lessons = module.lessons.map((lesson, index) => {
+    const embed = videoEmbedInfo(lesson.videoUrl, lesson.id);
+    const hasVideo = !!lesson.videoUrl;
+    const resourceBlocked = lesson.resourceRequired && !!lesson.resourceUrl && !lesson.resourceCompleted;
+    const contractBlocked = lesson.contractRequired && !!lesson.contractUrl && !lesson.contractCompleted;
+    const progress = lesson.videoProgress || { watched: lesson.watched, watchedPercent: lesson.watched ? 100 : 0, position: 0, furthest: 0 };
+    const safeVideoUrl = (() => { try { const url = new URL(lesson.videoUrl); return ['http:', 'https:'].includes(url.protocol) ? url.href : ''; } catch { return ''; } })();
+    const driveVideo = embed?.provider === 'google-drive';
+    const lessonLocked = !ownerViewing && !!lesson.locked;
+    const canComplete = !ownerViewing && !lessonLocked && module.unlocked && !resourceBlocked && !contractBlocked && (!hasVideo || driveVideo || progress.watched);
+    const video = hasVideo && !lessonLocked ? `<div class="bootcamp-video">${embed ? `${bootCampVideoSlot(lesson, embed, `${ownerViewing || driveVideo ? '' : `id="video-${escapeHtml(lesson.id)}" data-bootcamp-player data-provider="${embed.provider}" data-lesson-id="${escapeHtml(lesson.id)}" data-video-position="${progress.position || 0}" data-video-furthest="${progress.furthest || 0}" data-video-watched="${progress.watched ? 'true' : 'false'}" data-original-url="${escapeHtml(safeVideoUrl)}"`}`, !ownerViewing && !module.unlocked)}${driveVideo && safeVideoUrl ? `<a class="loom-link" href="${escapeHtml(safeVideoUrl)}" target="_blank" rel="noopener noreferrer">Open Video in Google Drive</a>` : ''}`
+        : safeVideoUrl ? `<a class="loom-link" href="${escapeHtml(safeVideoUrl)}" target="_blank" rel="noopener noreferrer">Open Video</a>` : '<span class="video-training-status">Video link unavailable.</span>'}${!ownerViewing ? `<span class="video-training-status" data-video-status="${escapeHtml(lesson.id)}">${driveVideo ? 'Google Drive playback cannot be tracked; lesson completion does not verify watch time.' : progress.watched ? '✓ Training Completed' : `Video Training — ${progress.watchedPercent}% watched${embed ? '' : ' · this video host cannot be tracked'}`}</span>` : ''}</div>` : '';
+    const uploadForm = ownerViewing ? `<form class="bootcamp-video-form" data-bootcamp-lesson-form="${lesson.id}"><input name="title" value="${escapeHtml(lesson.title)}" required><input name="description" value="${escapeHtml(lesson.instructions)}" placeholder="Description"><input name="videoUrl" type="url" value="${escapeHtml(lesson.videoUrl || '')}" placeholder="Optional video URL"><input name="resourceUrl" type="url" value="${escapeHtml(lesson.resourceUrl || '')}" placeholder="Optional document/resource URL"><input name="contractUrl" type="url" value="${escapeHtml(lesson.contractUrl || '')}" placeholder="Optional contract/signature URL"><label class="check-label"><input name="required" type="checkbox" ${lesson.required ? 'checked' : ''}> Required lesson</label><label class="check-label"><input name="resourceRequired" type="checkbox" ${lesson.resourceRequired ? 'checked' : ''}> Required resource</label><label class="check-label"><input name="contractRequired" type="checkbox" ${lesson.contractRequired ? 'checked' : ''}> Required contract</label><button class="row-action">Save lesson</button><button class="row-action danger" type="button" data-bootcamp-delete-lesson="${lesson.id}">Delete</button><button class="row-action" type="button" data-bootcamp-move-lesson="${lesson.id}" data-direction="up" ${index === 0 ? 'disabled' : ''}>↑</button><button class="row-action" type="button" data-bootcamp-move-lesson="${lesson.id}" data-direction="down" ${index === module.lessons.length - 1 ? 'disabled' : ''}>↓</button></form>` : '';
+    return `<div class="bootcamp-lesson ${lesson.done ? 'done' : ''} ${lessonLocked ? 'lesson-locked' : ''}"><button class="check" ${canComplete ? '' : 'disabled'} data-bootcamp-complete="${lesson.id}" data-video-check="${hasVideo ? escapeHtml(lesson.id) : ''}" data-module-unlocked="${module.unlocked}" data-requirements-ready="${!resourceBlocked && !contractBlocked}">${lesson.done ? '✓' : ''}</button><div class="bootcamp-lesson-content"><b>${escapeHtml(lesson.title)}</b><span>${escapeHtml(lesson.instructions)}</span>${lessonLocked ? '<span class="lesson-lock-note">🔒 Locked — complete the previous lesson first</span>' : ''}${video}${lesson.resourceUrl && !lessonLocked ? `<div class="bootcamp-resource"><a class="loom-link" href="${escapeHtml(lesson.resourceUrl)}" target="_blank" rel="noopener">Open resource</a>${!ownerViewing && module.unlocked ? lesson.resourceCompleted ? '<span class="resource-complete">Resource completed</span>' : '<button class="row-action" data-bootcamp-resource="' + lesson.id + '">Mark resource complete</button>' : ''}</div>` : ''}${lesson.contractUrl && !lessonLocked ? `<div class="bootcamp-resource"><a class="loom-link" href="${escapeHtml(lesson.contractUrl)}" target="_blank" rel="noopener">Open contract/signature</a>${!ownerViewing && module.unlocked ? lesson.contractCompleted ? '<span class="resource-complete">Contract completed</span>' : '<button class="row-action" data-bootcamp-contract="' + lesson.id + '">Mark contract complete</button>' : ''}</div>` : ''}${uploadForm}</div></div>`;
+  }).join('');
   return `<section class="card bootcamp-module ${state}"><div class="bootcamp-module-head"><div><span class="stage-index">0${module.idx + 1}</span><h2>${escapeHtml(module.title)}</h2><p>${escapeHtml(module.description)}</p></div><span class="status-pill ${state === 'complete' ? '' : state === 'locked' ? 'locked' : 'attention'}">${module.complete ? 'Completed' : module.unlocked ? 'Current' : 'Locked'}</span></div>${moduleControls}<div class="bootcamp-lessons">${lessons}</div>${ownerViewing ? `<form class="bootcamp-add-form" data-bootcamp-add-lesson="${module.id}"><input name="title" placeholder="Add custom lesson" required><button class="primary-button">Add lesson</button></form>` : ''}</section>`;
 }
 function bootCamp() {
@@ -364,7 +631,12 @@ function render() {
   else if (view === 'settings') { pageTitle = 'Account settings'; content = accountSettings(); }
   else if (view === 'recruits') { pageTitle = 'Recruiting pipeline'; content = recruits(); }
   else { pageTitle = 'Agency overview'; content = owner(); }
-  app.innerHTML = content + (tempPasswordNotice ? tempPasswordModal() : '');
+  const html = content + (tempPasswordNotice ? tempPasswordModal() : '');
+  // Re-rendering identical Boot Camp markup would rebuild every lesson and reload active players for no visible change.
+  if (view === 'bootcamp' && html === lastRenderedBootCampHtml && app.dataset.renderedView === 'bootcamp') { document.querySelector('#page-title').textContent = pageTitle; return; }
+  lastRenderedBootCampHtml = view === 'bootcamp' ? html : '';
+  app.dataset.renderedView = view;
+  app.innerHTML = html;
   if (view === 'agent' && me.role === 'agent') { addMissionContinue(data.agent); composeAgentCommand(); }
   else if (view === 'agent-detail' && me.role === 'owner' && selectedAgent) { const viewedAgent = data.agents.find(agent => agent.id === selectedAgent); if (viewedAgent) addForgeCore(viewedAgent); composeAgentCommand(); }
   else if (view === 'owner' && me.role === 'owner') composeOwnerCommand();
@@ -390,7 +662,6 @@ function bind() {
   document.querySelectorAll('[data-complete]').forEach(button => button.onclick = () => toggleTask(button.dataset.complete));
   document.querySelectorAll('[data-advance-agent]').forEach(button => button.onclick = () => { const agent = data.agents.find(item => item.id === button.dataset.advanceAgent); if (agent && window.confirm(`Approve ${agent.name}'s advancement to the next stage?`)) mutate(() => api(`/api/agents/${agent.id}/advance`, { method: 'POST' })); });
   document.querySelectorAll('[data-bootcamp-complete]').forEach(button => button.onclick = () => mutate(async () => { const result = await api(`/api/me/bootcamp/lessons/${button.dataset.bootcampComplete}/toggle`, { method: 'POST' }); data.bootcamp = result.bootcamp; }));
-  document.querySelectorAll('[data-bootcamp-watch]').forEach(button => button.onclick = () => mutate(async () => { const result = await api(`/api/me/bootcamp/lessons/${button.dataset.bootcampWatch}/watch`, { method: 'POST' }); data.bootcamp = result.bootcamp; }));
   document.querySelectorAll('[data-bootcamp-resource]').forEach(button => button.onclick = () => mutate(async () => { const result = await api(`/api/me/bootcamp/lessons/${button.dataset.bootcampResource}/resource-complete`, { method: 'POST' }); data.bootcamp = result.bootcamp; }));
   document.querySelectorAll('[data-bootcamp-contract]').forEach(button => button.onclick = () => mutate(async () => { const result = await api(`/api/me/bootcamp/lessons/${button.dataset.bootcampContract}/contract-complete`, { method: 'POST' }); data.bootcamp = result.bootcamp; }));
   document.querySelectorAll('[data-bootcamp-add-module]').forEach(form => form.onsubmit = event => { event.preventDefault(); const formData = new FormData(form); mutate(() => api('/api/bootcamp/modules', { method: 'POST', body: JSON.stringify({ title: formData.get('title'), description: formData.get('description') }) })); });
@@ -427,6 +698,8 @@ function bind() {
   document.querySelectorAll('[data-recruit-convert]').forEach(button => button.onclick = () => { accountModalContext = { mode: 'convert', recruitId: button.dataset.recruitConvert }; showAccountModal = true; render(); });
   const recruitForm = document.querySelector('#recruit-form');
   if (recruitForm) recruitForm.onsubmit = event => { event.preventDefault(); const formData = new FormData(recruitForm); const payload = { name: formData.get('name'), email: formData.get('email'), phone: formData.get('phone'), notes: formData.get('notes') }; mutate(() => editingRecruit ? api(`/api/recruits/${editingRecruit}`, { method: 'PATCH', body: JSON.stringify(payload) }) : api('/api/recruits', { method: 'POST', body: JSON.stringify(payload) })); showRecruitModal = false; editingRecruit = null; };
+  document.querySelectorAll('[data-bootcamp-load-video]').forEach(button => button.onclick = () => openBootCampVideo(button.dataset.bootcampLoadVideo));
+  initBootCampVideoPlayers();
 }
 
 boot();
