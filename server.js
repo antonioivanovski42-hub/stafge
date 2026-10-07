@@ -13,6 +13,7 @@ const db = new DatabaseSync(path.join(DATA_DIR, 'agentforge.db'));
 
 const PORT = process.env.PORT || 8123;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const NEW_AGENT_TEMP_PASSWORD = 'Empire2026!';
 
 // ---------- Schema ----------
 db.exec(`
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   password_hash TEXT NOT NULL,
   password_salt TEXT NOT NULL,
   needs_setup INTEGER NOT NULL DEFAULT 0,
+  must_change_password INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS agents (
@@ -168,6 +170,8 @@ if (!hasNeedsSetupColumn) {
   db.prepare("UPDATE accounts SET password_hash = '', password_salt = '', needs_setup = 1 WHERE role = 'owner'").run();
   db.prepare("DELETE FROM sessions WHERE account_id IN (SELECT id FROM accounts WHERE role = 'owner')").run();
 }
+const hasMustChangePasswordColumn = db.prepare("PRAGMA table_info(accounts)").all().some(column => column.name === 'must_change_password');
+if (!hasMustChangePasswordColumn) db.exec('ALTER TABLE accounts ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0');
 const bootCampLessonColumns = db.prepare('PRAGMA table_info(bootcamp_lessons)').all();
 if (!bootCampLessonColumns.some(column => column.name === 'video_url')) db.exec("ALTER TABLE bootcamp_lessons ADD COLUMN video_url TEXT NOT NULL DEFAULT ''");
 if (!bootCampLessonColumns.some(column => column.name === 'resource_required')) db.exec("ALTER TABLE bootcamp_lessons ADD COLUMN resource_required INTEGER NOT NULL DEFAULT 0");
@@ -500,10 +504,15 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true });
     }
 
+    if (session && session.account.must_change_password && pathname !== '/api/bootstrap' && pathname !== '/api/account/password') {
+      return sendJson(res, 403, { error: 'Change your temporary password before continuing.', mustChangePassword: true });
+    }
+
     // ---- Bootstrap ----
     if (pathname === '/api/bootstrap' && req.method === 'GET') {
       if (!requireAuth()) return;
-      const user = { id: session.account.id, name: session.account.name, role: session.account.role, email: session.account.email };
+      const user = { id: session.account.id, name: session.account.name, role: session.account.role, email: session.account.email, mustChangePassword: !!session.account.must_change_password };
+      if (session.account.must_change_password) return sendJson(res, 200, { user, mustChangePassword: true });
       if (session.account.role === 'owner') {
         const stages = allStages().map(serializeStage);
         const agentRows = db.prepare('SELECT * FROM agents').all();
@@ -816,10 +825,10 @@ const server = http.createServer(async (req, res) => {
       const stageId = String(body.stageId || '');
       if (!name || !email || !stageRow(stageId)) return sendJson(res, 400, { error: 'Name, valid email and stage are required.' });
       if (db.prepare('SELECT 1 FROM accounts WHERE lower(email) = ?').get(email)) return sendJson(res, 409, { error: 'An account with this email already exists.' });
-      const tempPassword = genTempPassword();
+      const tempPassword = NEW_AGENT_TEMP_PASSWORD;
       const { salt, hash } = hashPassword(tempPassword);
       const accountId = genId('acct');
-      db.prepare('INSERT INTO accounts (id, role, name, email, password_hash, password_salt, created_at) VALUES (?,?,?,?,?,?,?)').run(accountId, 'agent', name, email, hash, salt, new Date().toISOString());
+      db.prepare('INSERT INTO accounts (id, role, name, email, password_hash, password_salt, must_change_password, created_at) VALUES (?,?,?,?,?,?,1,?)').run(accountId, 'agent', name, email, hash, salt, new Date().toISOString());
       const agentId = genId('agent');
       const enteredAt = new Date().toISOString();
       db.prepare('INSERT INTO agents (id, account_id, name, email, initials, color, stage_id, started, production) VALUES (?,?,?,?,?,?,?,?,0)').run(agentId, accountId, name, email, initialsFor(name), 'blue', stageId, enteredAt);
@@ -855,14 +864,14 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { tempPassword });
     }
     if (pathname === '/api/account/password' && req.method === 'POST') {
-      if (!requireOwner()) return;
+      if (!requireAuth()) return;
       const currentPassword = String(body.currentPassword || '');
       const newPassword = String(body.newPassword || '');
-      if (!verifyPassword(currentPassword, session.account.password_salt, session.account.password_hash)) return sendJson(res, 400, { error: 'Current password is incorrect.' });
+      if (!session.account.must_change_password && !verifyPassword(currentPassword, session.account.password_salt, session.account.password_hash)) return sendJson(res, 400, { error: 'Current password is incorrect.' });
       if (newPassword.length < 8) return sendJson(res, 400, { error: 'New password must be at least 8 characters.' });
       if (newPassword !== String(body.confirmPassword || '')) return sendJson(res, 400, { error: 'New passwords do not match.' });
       const { salt, hash } = hashPassword(newPassword);
-      db.prepare('UPDATE accounts SET password_hash = ?, password_salt = ? WHERE id = ?').run(hash, salt, session.account.id);
+      db.prepare('UPDATE accounts SET password_hash = ?, password_salt = ?, must_change_password = 0 WHERE id = ?').run(hash, salt, session.account.id);
       db.prepare('DELETE FROM sessions WHERE account_id = ? AND token != ?').run(session.account.id, session.token);
       return sendJson(res, 200, { ok: true });
     }
@@ -973,7 +982,7 @@ const server = http.createServer(async (req, res) => {
       const tempPassword = genTempPassword();
       const { salt, hash } = hashPassword(tempPassword);
       const accountId = genId('acct');
-      db.prepare('INSERT INTO accounts (id, role, name, email, password_hash, password_salt, created_at) VALUES (?,?,?,?,?,?,?)').run(accountId, 'agent', recruit.name, email, hash, salt, new Date().toISOString());
+      db.prepare('INSERT INTO accounts (id, role, name, email, password_hash, password_salt, must_change_password, created_at) VALUES (?,?,?,?,?,?,1,?)').run(accountId, 'agent', recruit.name, email, hash, salt, new Date().toISOString());
       const agentId = genId('agent');
       const enteredAt = new Date().toISOString();
       db.prepare('INSERT INTO agents (id, account_id, name, email, initials, color, stage_id, started, production) VALUES (?,?,?,?,?,?,?,?,0)').run(agentId, accountId, recruit.name, email, initialsFor(recruit.name), 'blue', stageId, enteredAt);
