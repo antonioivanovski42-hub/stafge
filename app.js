@@ -144,6 +144,7 @@ let youtubeApiPromise;
 let vimeoApiPromise;
 let bootCampVideoCleanup = [];
 let activeBootCampLesson = null;
+let bootCampTab = null;
 let lastRenderedBootCampHtml = '';
 function loadYouTubeApi() {
   if (window.YT?.Player) return Promise.resolve(window.YT);
@@ -394,12 +395,48 @@ function bootCampModule(module, ownerViewing = false) {
   }).join('');
   return `<section class="card bootcamp-module ${state}"><div class="bootcamp-module-head"><div><span class="stage-index">0${module.idx + 1}</span><h2>${escapeHtml(module.title)}</h2><p>${escapeHtml(module.description)}</p></div><span class="status-pill ${state === 'complete' ? '' : state === 'locked' ? 'locked' : 'attention'}">${module.complete ? 'Completed' : module.unlocked ? 'Current' : 'Locked'}</span></div>${moduleControls}<div class="bootcamp-lessons">${lessons}</div>${ownerViewing ? `<form class="bootcamp-add-form" data-bootcamp-add-lesson="${module.id}"><input name="title" placeholder="Add custom lesson" required><button class="primary-button">Add lesson</button></form>` : ''}</section>`;
 }
+function bootCampModuleProgress(module) {
+  const required = module.lessons.filter(lesson => lesson.required);
+  return required.length ? Math.round((required.filter(lesson => lesson.done).length / required.length) * 100) : (module.complete ? 100 : 0);
+}
+function bootCampDefaultTab(modules) {
+  return (modules.find(module => module.unlocked && !module.complete) || modules[modules.length - 1])?.id || 'extras';
+}
+function bootCampTabs(modules, activeTab, owner) {
+  const currentId = owner ? null : modules.find(module => module.unlocked && !module.complete)?.id;
+  const tabs = modules.map(module => {
+    const state = owner ? 'builder' : module.complete ? 'complete' : module.unlocked ? 'current' : 'locked';
+    const percent = bootCampModuleProgress(module);
+    const label = owner ? `${module.lessons.length} lesson${module.lessons.length === 1 ? '' : 's'}` : `${percent}%`;
+    const stateLabel = owner ? '' : module.complete ? 'Completed' : module.id === currentId ? 'Current' : module.unlocked ? 'Open' : 'Locked';
+    return `<button type="button" role="tab" class="bootcamp-tab ${state} ${module.id === currentId ? 'is-next' : ''} ${module.id === activeTab ? 'active' : ''}" aria-selected="${module.id === activeTab}" data-bootcamp-tab="${escapeHtml(module.id)}"><span class="bootcamp-tab-name">${escapeHtml(module.title)}</span><span class="bootcamp-tab-meta"><b>${label}</b>${stateLabel ? `<em>${state === 'complete' ? '✓ ' : state === 'locked' ? '🔒 ' : ''}${stateLabel}</em>` : ''}</span>${owner ? '' : `<span class="bootcamp-tab-meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><i style="width:${percent}%"></i></span>`}</button>`;
+  }).join('');
+  return `<nav class="bootcamp-tabs" role="tablist" aria-label="Boot Camp modules">${tabs}<button type="button" role="tab" class="bootcamp-tab extras ${activeTab === 'extras' ? 'active' : ''}" aria-selected="${activeTab === 'extras'}" data-bootcamp-tab="extras"><span class="bootcamp-tab-name">Extra Resources</span><span class="bootcamp-tab-meta"><em>Supplemental</em></span></button></nav>`;
+}
+function bootCampExtraLinkRow(link = {}) {
+  return `<div class="bootcamp-extra-link-row" data-extra-link-row><label>Link Title<input name="linkTitle" value="${escapeHtml(link.title === link.url ? '' : link.title)}" placeholder="Link title" required></label><label>URL<input name="linkUrl" type="url" value="${escapeHtml(link.url)}" placeholder="https://..." required></label><div class="bootcamp-extra-link-actions"><button class="row-action" type="button" data-extra-link-up aria-label="Move link up">↑</button><button class="row-action" type="button" data-extra-link-down aria-label="Move link down">↓</button><button class="row-action danger" type="button" data-extra-link-delete>Delete link</button></div></div>`;
+}
+function bootCampExtras(extras, owner) {
+  const topics = extras.map(topic => {
+    const links = topic.links.length ? `<ul class="extra-links">${topic.links.map(link => `<li><a class="loom-link" href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.title === link.url ? 'Resource' : link.title)}</a></li>`).join('')}</ul>` : '<span class="path-meta">No links yet.</span>';
+    const linkRows = topic.links.map(bootCampExtraLinkRow).join('');
+    const form = owner ? `<form class="bootcamp-extra-form" data-bootcamp-extra-form="${escapeHtml(topic.id)}"><input name="title" value="${escapeHtml(topic.title)}" placeholder="Topic title" required><input name="description" value="${escapeHtml(topic.description)}" placeholder="Topic description"><div class="bootcamp-extra-link-list">${linkRows}</div><button class="row-action" type="button" data-bootcamp-add-link>Add link</button><button class="row-action">Save topic</button><button class="row-action danger" type="button" data-bootcamp-delete-extra="${escapeHtml(topic.id)}">Delete</button></form>` : '';
+    return `<article class="bootcamp-extra-topic"><h3>${escapeHtml(topic.title)}</h3>${topic.description ? `<p>${escapeHtml(topic.description)}</p>` : ''}${links}${form}</article>`;
+  }).join('');
+  const addForm = owner ? `<form class="bootcamp-extra-form bootcamp-extra-add" data-bootcamp-add-extra><input name="title" placeholder="New topic title" required><input name="description" placeholder="Topic description"><div class="bootcamp-extra-link-list"></div><button class="row-action" type="button" data-bootcamp-add-link>Add link</button><button class="primary-button">Add topic</button></form>` : '';
+  return `<section class="bootcamp-extras"><div class="bootcamp-module-head"><div><span class="stage-index">+</span><h2>Extra Resources</h2><p>Supplemental videos and links. These are optional and do not affect Boot Camp progress or module unlocking.</p></div><span class="status-pill">Optional</span></div>${addForm}<div class="bootcamp-extra-list">${topics || '<div class="empty">No extra resources yet.</div>'}</div></section>`;
+}
 function bootCamp() {
   const owner = me.role === 'owner';
   const bootcamp = data.bootcamp;
   const progress = owner ? null : bootCampProgress(bootcamp);
   const agents = owner ? bootcamp.agents : [];
-  return `<div class="page-heading"><div><div class="eyebrow">Structured onboarding</div><h1>Boot Camp</h1><p>${owner ? 'See every agent\'s course progress and module status.' : 'Complete each requirement in order. The next module unlocks when the current one is complete.'}</p></div>${!owner ? `<span class="bootcamp-total">${progress}% complete</span>` : ''}</div>${owner ? `<section class="card bootcamp-owner-list"><div class="subhead"><h2>Agent progress</h2><span class="path-meta">${agents.length} agents</span></div>${agents.length ? agents.map(agent => `<div class="bootcamp-agent-row"><div><b>${escapeHtml(agent.name)}</b><small>${agent.bootcamp.completedLessons} of ${agent.bootcamp.totalLessons} requirements complete</small></div><strong>${bootCampProgress(agent.bootcamp)}%</strong><div class="progress-track"><div class="progress-fill" style="width:${bootCampProgress(agent.bootcamp)}%"></div></div></div>`).join('') : '<div class="empty">No agent accounts yet.</div>'}</section><div class="section-heading"><div><div class="eyebrow">Course builder</div><h2>Manage modules and lessons</h2></div></div><form class="card bootcamp-add-module" data-bootcamp-add-module><input name="title" placeholder="New module title" required><input name="description" placeholder="Module description"><button class="primary-button">Add module</button></form>${bootcamp.modules.map(module => bootCampModule(module, true)).join('')}` : `<section class="card bootcamp-progress-card"><div class="progress-row"><span>Overall Boot Camp progress</span><b>${progress}%</b></div><div class="progress-track"><div class="progress-fill" style="width:${progress}%"></div></div><span class="path-meta">${bootcamp.completedLessons} of ${bootcamp.totalLessons} requirements complete</span></section>${bootcamp.modules.map(module => bootCampModule(module)).join('')}`}`;
+  const modules = bootcamp.modules;
+  const extras = bootcamp.extras || [];
+  if (bootCampTab !== 'extras' && !modules.some(module => module.id === bootCampTab)) bootCampTab = bootCampDefaultTab(modules);
+  const tabs = bootCampTabs(modules, bootCampTab, owner);
+  const panel = bootCampTab === 'extras' ? bootCampExtras(extras, owner) : bootCampModule(modules.find(module => module.id === bootCampTab), owner);
+  return `<div class="page-heading"><div><div class="eyebrow">Structured onboarding</div><h1>Boot Camp</h1><p>${owner ? 'See every agent\'s course progress and module status.' : 'Complete each requirement in order. The next module unlocks when the current one is complete.'}</p></div>${!owner ? `<span class="bootcamp-total">${progress}% complete</span>` : ''}</div>${owner ? `<section class="card bootcamp-owner-list"><div class="subhead"><h2>Agent progress</h2><span class="path-meta">${agents.length} agents</span></div>${agents.length ? agents.map(agent => `<div class="bootcamp-agent-row"><div><b>${escapeHtml(agent.name)}</b><small>${agent.bootcamp.completedLessons} of ${agent.bootcamp.totalLessons} requirements complete</small></div><strong>${bootCampProgress(agent.bootcamp)}%</strong><div class="progress-track"><div class="progress-fill" style="width:${bootCampProgress(agent.bootcamp)}%"></div></div></div>`).join('') : '<div class="empty">No agent accounts yet.</div>'}</section><div class="section-heading"><div><div class="eyebrow">Course builder</div><h2>Manage modules and lessons</h2></div></div><form class="card bootcamp-add-module" data-bootcamp-add-module><input name="title" placeholder="New module title" required><input name="description" placeholder="Module description"><button class="primary-button">Add module</button></form>${tabs}${panel}` : `<section class="card bootcamp-progress-card"><div class="progress-row"><span>Overall Boot Camp progress</span><b>${progress}%</b></div><div class="progress-track"><div class="progress-fill" style="width:${progress}%"></div></div><span class="path-meta">${bootcamp.completedLessons} of ${bootcamp.totalLessons} requirements complete</span></section>${tabs}${panel}`}`;
 }
 
 function createForgeCore(progressValue, label) {
@@ -590,6 +627,8 @@ function composeBootCampCommand() {
   const builderHeading = app.querySelector(':scope > .section-heading');
   const moduleForm = app.querySelector(':scope > .bootcamp-add-module');
   const modules = [...app.querySelectorAll(':scope > .bootcamp-module')];
+  const tabs = app.querySelector(':scope > .bootcamp-tabs');
+  const extras = app.querySelector(':scope > .bootcamp-extras');
   const moduleList = document.createElement('div');
   moduleList.className = 'training-pathway';
   modules.forEach((module, index) => {
@@ -605,7 +644,9 @@ function composeBootCampCommand() {
   if (ownerProgress) screen.append(ownerProgress);
   if (builderHeading) screen.append(builderHeading);
   if (moduleForm) screen.append(moduleForm);
-  screen.append(moduleList);
+  if (tabs) screen.append(tabs);
+  if (extras) screen.append(extras);
+  if (modules.length) screen.append(moduleList);
   app.prepend(screen);
 }
 
@@ -664,6 +705,17 @@ function bind() {
   document.querySelectorAll('[data-bootcamp-complete]').forEach(button => button.onclick = () => mutate(async () => { const result = await api(`/api/me/bootcamp/lessons/${button.dataset.bootcampComplete}/toggle`, { method: 'POST' }); data.bootcamp = result.bootcamp; }));
   document.querySelectorAll('[data-bootcamp-resource]').forEach(button => button.onclick = () => mutate(async () => { const result = await api(`/api/me/bootcamp/lessons/${button.dataset.bootcampResource}/resource-complete`, { method: 'POST' }); data.bootcamp = result.bootcamp; }));
   document.querySelectorAll('[data-bootcamp-contract]').forEach(button => button.onclick = () => mutate(async () => { const result = await api(`/api/me/bootcamp/lessons/${button.dataset.bootcampContract}/contract-complete`, { method: 'POST' }); data.bootcamp = result.bootcamp; }));
+  document.querySelectorAll('[data-bootcamp-tab]').forEach(button => button.onclick = () => { if (bootCampTab === button.dataset.bootcampTab) return; bootCampTab = button.dataset.bootcampTab; activeBootCampLesson = null; render(); });
+  const extraPayload = form => { const formData = new FormData(form); const links = [...form.querySelectorAll('[data-extra-link-row]')].map(row => ({ title: row.querySelector('[name="linkTitle"]').value.trim(), url: row.querySelector('[name="linkUrl"]').value.trim() })); return JSON.stringify({ title: formData.get('title'), description: formData.get('description'), links }); };
+  const updateExtraLinkControls = list => [...list.querySelectorAll('[data-extra-link-row]')].forEach((row, index, rows) => { row.querySelector('[data-extra-link-up]').disabled = index === 0; row.querySelector('[data-extra-link-down]').disabled = index === rows.length - 1; });
+  document.querySelectorAll('.bootcamp-extra-link-list').forEach(updateExtraLinkControls);
+  document.querySelectorAll('[data-bootcamp-add-link]').forEach(button => button.onclick = () => { const list = button.closest('form').querySelector('.bootcamp-extra-link-list'); list.insertAdjacentHTML('beforeend', bootCampExtraLinkRow()); updateExtraLinkControls(list); list.lastElementChild.querySelector('[name="linkTitle"]').focus(); });
+  document.querySelectorAll('[data-extra-link-delete]').forEach(button => button.onclick = () => { const list = button.closest('.bootcamp-extra-link-list'); button.closest('[data-extra-link-row]').remove(); updateExtraLinkControls(list); });
+  document.querySelectorAll('[data-extra-link-up]').forEach(button => button.onclick = () => { const row = button.closest('[data-extra-link-row]'); row.parentElement.insertBefore(row, row.previousElementSibling); updateExtraLinkControls(row.parentElement); });
+  document.querySelectorAll('[data-extra-link-down]').forEach(button => button.onclick = () => { const row = button.closest('[data-extra-link-row]'); row.parentElement.insertBefore(row.nextElementSibling, row); updateExtraLinkControls(row.parentElement); });
+  document.querySelectorAll('[data-bootcamp-add-extra]').forEach(form => form.onsubmit = event => { event.preventDefault(); mutate(() => api('/api/bootcamp/extras', { method: 'POST', body: extraPayload(form) })); });
+  document.querySelectorAll('[data-bootcamp-extra-form]').forEach(form => form.onsubmit = event => { event.preventDefault(); mutate(() => api(`/api/bootcamp/extras/${form.dataset.bootcampExtraForm}`, { method: 'PATCH', body: extraPayload(form) })); });
+  document.querySelectorAll('[data-bootcamp-delete-extra]').forEach(button => button.onclick = () => { if (window.confirm('Delete this Extra Resources topic and its links?')) mutate(() => api(`/api/bootcamp/extras/${button.dataset.bootcampDeleteExtra}`, { method: 'DELETE' })); });
   document.querySelectorAll('[data-bootcamp-add-module]').forEach(form => form.onsubmit = event => { event.preventDefault(); const formData = new FormData(form); mutate(() => api('/api/bootcamp/modules', { method: 'POST', body: JSON.stringify({ title: formData.get('title'), description: formData.get('description') }) })); });
   document.querySelectorAll('[data-bootcamp-module-form]').forEach(form => form.onsubmit = event => { event.preventDefault(); const formData = new FormData(form); mutate(() => api(`/api/bootcamp/modules/${form.dataset.bootcampModuleForm}`, { method: 'PATCH', body: JSON.stringify({ title: formData.get('title'), description: formData.get('description') }) })); });
   document.querySelectorAll('[data-bootcamp-delete-module]').forEach(button => button.onclick = () => { if (window.confirm('Delete this module and its lessons?')) mutate(() => api(`/api/bootcamp/modules/${button.dataset.bootcampDeleteModule}`, { method: 'DELETE' })); });

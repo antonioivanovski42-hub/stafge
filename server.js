@@ -145,6 +145,19 @@ CREATE TABLE IF NOT EXISTS bootcamp_contract_completions (
   completed_at TEXT NOT NULL,
   PRIMARY KEY (agent_id, lesson_id)
 );
+CREATE TABLE IF NOT EXISTS bootcamp_extra_topics (
+  id TEXT PRIMARY KEY,
+  idx INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS bootcamp_extra_links (
+  id TEXT PRIMARY KEY,
+  topic_id TEXT NOT NULL,
+  idx INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  url TEXT NOT NULL
+);
 `);
 
 // Migrate older databases created before the needs_setup column existed.
@@ -293,6 +306,33 @@ function bootCampLessonLocked(agentId, lesson) {
   const index = lessons.findIndex(item => item.id === lesson.id);
   return lessons.slice(0, Math.max(0, index)).some(item => !done.includes(item.id));
 }
+// Extra Resources are supplemental: they never affect lesson completion, module unlocking or progress totals.
+function serializeBootCampExtras() {
+  const links = db.prepare('SELECT * FROM bootcamp_extra_links ORDER BY idx ASC').all();
+  return db.prepare('SELECT * FROM bootcamp_extra_topics ORDER BY idx ASC').all().map(topic => ({
+    id: topic.id, title: topic.title, description: topic.description,
+    links: links.filter(link => link.topic_id === topic.id).map(link => ({ id: link.id, title: link.title, url: link.url }))
+  }));
+}
+function parseExtraLinks(input) {
+  if (!Array.isArray(input)) return { error: 'Links must be a list.' };
+  const links = [];
+  for (const item of input) {
+    const url = String(item && item.url || '').trim();
+    const title = String(item && item.title || '').trim();
+    if (!url && !title) continue;
+    if (!title) return { error: 'Each resource link needs a title.' };
+    try { if (!['http:', 'https:'].includes(new URL(url).protocol)) throw new Error(); }
+    catch { return { error: 'Each resource link needs a valid HTTP or HTTPS URL.' }; }
+    links.push({ title, url });
+  }
+  return { links };
+}
+function saveExtraLinks(topicId, links) {
+  db.prepare('DELETE FROM bootcamp_extra_links WHERE topic_id = ?').run(topicId);
+  const insert = db.prepare('INSERT INTO bootcamp_extra_links (id, topic_id, idx, title, url) VALUES (?,?,?,?,?)');
+  links.forEach((link, index) => insert.run(genId('bootcamp-extra-link'), topicId, index, link.title, link.url));
+}
 const LESSON_LOCKED_ERROR = 'Complete the previous lesson first.';
 function serializeBootCamp(agentId) {
   const done = bootCampDoneIds(agentId);
@@ -307,6 +347,7 @@ function serializeBootCamp(agentId) {
   });
   return {
     modules: modules.map((module, index) => ({ ...module, unlocked: index === 0 || modules[index - 1].complete })),
+    extras: serializeBootCampExtras(),
     completedLessons: done.length,
     totalLessons: modules.reduce((total, module) => total + module.lessons.filter(lesson => lesson.required).length, 0)
   };
@@ -471,7 +512,7 @@ const server = http.createServer(async (req, res) => {
         const recruits = db.prepare('SELECT * FROM recruits ORDER BY created_at DESC').all();
         const notifications = db.prepare(`SELECT n.*, a.name AS agent_name FROM owner_notifications n JOIN agents a ON a.id = n.agent_id WHERE n.acknowledged = 0 ORDER BY n.created_at DESC`).all();
         const bootcampAgents = agentRows.map(agent => ({ id: agent.id, name: agent.name, email: agent.email, bootcamp: serializeBootCamp(agent.id) }));
-        return sendJson(res, 200, { user, role: 'owner', stages, agents, recruits, notifications, bootcamp: { agents: bootcampAgents, modules: serializeBootCamp('').modules } });
+        return sendJson(res, 200, { user, role: 'owner', stages, agents, recruits, notifications, bootcamp: { agents: bootcampAgents, modules: serializeBootCamp('').modules, extras: serializeBootCampExtras() } });
       }
       const agentRow = db.prepare('SELECT * FROM agents WHERE account_id = ?').get(session.account.id);
       if (!agentRow) return sendJson(res, 200, { user, role: 'agent', agent: null, stages: [], stage: null });
@@ -527,6 +568,37 @@ const server = http.createServer(async (req, res) => {
       const targetIdx = body.direction === 'up' ? module.idx - 1 : module.idx + 1;
       const target = db.prepare('SELECT * FROM bootcamp_modules WHERE idx = ?').get(targetIdx);
       if (target) { db.prepare('UPDATE bootcamp_modules SET idx = ? WHERE id = ?').run(-1, module.id); db.prepare('UPDATE bootcamp_modules SET idx = ? WHERE id = ?').run(module.idx, target.id); db.prepare('UPDATE bootcamp_modules SET idx = ? WHERE id = ?').run(targetIdx, module.id); }
+      return sendJson(res, 200, { ok: true });
+    }
+    const bootCampExtraMatch = pathname.match(/^\/api\/bootcamp\/extras(?:\/([^/]+))?$/);
+    if (bootCampExtraMatch && req.method === 'POST' && !bootCampExtraMatch[1]) {
+      if (!requireOwner()) return;
+      const title = String(body.title || '').trim();
+      if (!title) return sendJson(res, 400, { error: 'Topic title is required.' });
+      const parsed = parseExtraLinks(body.links || []);
+      if (parsed.error) return sendJson(res, 400, { error: parsed.error });
+      const maxIdx = db.prepare('SELECT COALESCE(MAX(idx), -1) AS max_idx FROM bootcamp_extra_topics').get().max_idx;
+      const id = genId('bootcamp-extra');
+      db.prepare('INSERT INTO bootcamp_extra_topics (id, idx, title, description) VALUES (?,?,?,?)').run(id, maxIdx + 1, title, String(body.description || '').trim());
+      saveExtraLinks(id, parsed.links);
+      return sendJson(res, 201, { ok: true });
+    }
+    if (bootCampExtraMatch && bootCampExtraMatch[1] && ['PATCH', 'DELETE'].includes(req.method)) {
+      if (!requireOwner()) return;
+      const topic = db.prepare('SELECT * FROM bootcamp_extra_topics WHERE id = ?').get(bootCampExtraMatch[1]);
+      if (!topic) return sendJson(res, 404, { error: 'Extra Resources topic not found.' });
+      if (req.method === 'DELETE') {
+        db.prepare('DELETE FROM bootcamp_extra_links WHERE topic_id = ?').run(topic.id);
+        db.prepare('DELETE FROM bootcamp_extra_topics WHERE id = ?').run(topic.id);
+        db.prepare('UPDATE bootcamp_extra_topics SET idx = idx - 1 WHERE idx > ?').run(topic.idx);
+        return sendJson(res, 200, { ok: true });
+      }
+      const title = String(body.title !== undefined ? body.title : topic.title).trim();
+      if (!title) return sendJson(res, 400, { error: 'Topic title is required.' });
+      const parsed = body.links !== undefined ? parseExtraLinks(body.links) : null;
+      if (parsed && parsed.error) return sendJson(res, 400, { error: parsed.error });
+      db.prepare('UPDATE bootcamp_extra_topics SET title = ?, description = ? WHERE id = ?').run(title, String(body.description !== undefined ? body.description : topic.description).trim(), topic.id);
+      if (parsed) saveExtraLinks(topic.id, parsed.links);
       return sendJson(res, 200, { ok: true });
     }
     const bootCampLessonListMatch = pathname.match(/^\/api\/bootcamp\/modules\/([^/]+)\/lessons$/);
