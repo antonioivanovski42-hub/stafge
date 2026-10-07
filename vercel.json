@@ -1,14 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "server.js": {
-      "includeFiles": "{index.html,app.js,jarvis.js,styles.css,empire-ui.css,jarvis.css,db/postgres-schema.sql}"
+    "api/index.js": {
+      "includeFiles": "db/postgres-schema.sql"
     }
   },
   "rewrites": [
     {
-      "source": "/(.*)",
-      "destination": "/server.js"
+      "source": "/api/(.*)",
+      "destination": "/api/index.js"
     }
   ]
 }

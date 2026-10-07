@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { createPool, applySchema } = require('./db/postgres');
 
 const ROOT = __dirname;
+const STATIC_ROOT = path.join(ROOT, 'public');
 const PORT = process.env.PORT || 8123;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const NEW_AGENT_TEMP_PASSWORD = 'Empire2026!';
@@ -307,8 +308,8 @@ function readBody(req) {
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 function serveStatic(req, res, pathname) {
   const file = pathname === '/' ? 'index.html' : pathname.slice(1);
-  const fullPath = path.join(ROOT, file);
-  if (!fullPath.startsWith(ROOT) || !fs.existsSync(fullPath) || fs.statSync(fullPath).isDirectory()) { res.writeHead(404); res.end('Not found'); return; }
+  const fullPath = path.join(STATIC_ROOT, file);
+  if (!fullPath.startsWith(STATIC_ROOT) || !fs.existsSync(fullPath) || fs.statSync(fullPath).isDirectory()) { res.writeHead(404); res.end('Not found'); return; }
   const ext = path.extname(fullPath);
   res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
   fs.createReadStream(fullPath).pipe(res);
