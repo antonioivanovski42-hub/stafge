@@ -9,7 +9,6 @@ const ROOT = __dirname;
 const STATIC_ROOT = path.join(ROOT, 'public');
 const PORT = process.env.PORT || 8123;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const NEW_AGENT_TEMP_PASSWORD = 'Empire2026!';
 const pool = createPool();
 const db = {
   prepare(text) {
@@ -701,7 +700,7 @@ const server = http.createServer(async (req, res) => {
       const stageId = String(body.stageId || '');
       if (!name || !email || !await stageRow(stageId)) return sendJson(res, 400, { error: 'Name, valid email and stage are required.' });
       if (await db.prepare('SELECT 1 FROM accounts WHERE lower(email) = ?').get(email)) return sendJson(res, 409, { error: 'An account with this email already exists.' });
-      const tempPassword = NEW_AGENT_TEMP_PASSWORD;
+      const tempPassword = genTempPassword();
       const { salt, hash } = hashPassword(tempPassword);
       const accountId = genId('acct');
       await db.prepare('INSERT INTO accounts (id, role, name, email, password_hash, password_salt, must_change_password, created_at) VALUES (?,?,?,?,?,?,1,?)').run(accountId, 'agent', name, email, hash, salt, new Date().toISOString());
