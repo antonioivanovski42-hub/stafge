@@ -316,6 +316,13 @@ function serveStatic(req, res, pathname) {
 }
 
 const server = http.createServer(async (req, res) => {
+  // Vercel rewrites /api/* to /api/index.js?__api_path=*; restore the original path.
+  const rewritten = new URL(req.url, 'http://localhost');
+  const originalApiPath = rewritten.searchParams.get('__api_path');
+  if (originalApiPath !== null) {
+    rewritten.searchParams.delete('__api_path');
+    req.url = `/api/${originalApiPath}${rewritten.search}`;
+  }
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
   if (!pathname.startsWith('/api/')) return serveStatic(req, res, pathname);
