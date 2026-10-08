@@ -266,7 +266,13 @@ function initialsFor(name) { return name.trim().split(/\s+/).map(p => p[0]).join
 // ---------- Session helpers ----------
 function parseCookies(req) {
   const header = req.headers.cookie || '';
-  return Object.fromEntries(header.split(';').filter(Boolean).map(part => { const i = part.indexOf('='); return [part.slice(0, i).trim(), decodeURIComponent(part.slice(i + 1).trim())]; }));
+  return Object.fromEntries(header.split(';').filter(Boolean).map(part => {
+    const i = part.indexOf('=');
+    const raw = part.slice(i + 1).trim();
+    let value = raw;
+    try { value = decodeURIComponent(raw); } catch { /* keep the raw value; it will simply not match a session */ }
+    return [part.slice(0, i).trim(), value];
+  }));
 }
 async function createSession(accountId) {
   const token = crypto.randomBytes(32).toString('hex');
@@ -275,14 +281,29 @@ async function createSession(accountId) {
 }
 async function getSession(req) {
   const token = parseCookies(req).sid;
-  if (!token) return null;
+  if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
   const session = await db.prepare('SELECT * FROM sessions WHERE token = ?').get(token);
-  if (!session || session.expires_at < Date.now()) return null;
+  if (!session) return null;
+  if (Number(session.expires_at) < Date.now()) {
+    await db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
+    return null;
+  }
   const account = await db.prepare('SELECT * FROM accounts WHERE id = ?').get(session.account_id);
   return account ? { token, account } : null;
 }
 
 // ---------- HTTP plumbing ----------
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  'Content-Security-Policy': "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+};
+function applySecurityHeaders(res, isApi) {
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
+  if (isApi) { res.setHeader('Cache-Control', 'no-store'); res.setHeader('Pragma', 'no-cache'); }
+}
 function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
@@ -296,41 +317,183 @@ function expiredSessionCookie(req) {
   const secure = process.env.VERCEL === '1' || req.headers['x-forwarded-proto'] === 'https';
   return `sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`;
 }
+const MAX_BODY_BYTES = 256 * 1024;
 function readBody(req) {
   return new Promise((resolve, reject) => {
+    const fail = (message, status) => { const error = new Error(message); error.status = status; reject(error); };
+    const declared = Number(req.headers['content-length'] || 0);
+    if (declared > MAX_BODY_BYTES) { req.resume(); return fail('Request body is too large.', 413); }
     let raw = '';
-    req.on('data', chunk => { raw += chunk; if (raw.length > 1e6) req.destroy(); });
-    req.on('end', () => { if (!raw) return resolve({}); try { resolve(JSON.parse(raw)); } catch { reject(new Error('Invalid JSON body')); } });
+    let size = 0;
+    let tooLarge = false;
+    req.on('data', chunk => {
+      if (tooLarge) return;
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) { tooLarge = true; raw = ''; return; }
+      raw += chunk;
+    });
+    req.on('end', () => {
+      if (tooLarge) return fail('Request body is too large.', 413);
+      if (!raw) return resolve({});
+      if (!/^application\/json\b/i.test(String(req.headers['content-type'] || ''))) return fail('Content-Type must be application/json.', 415);
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { return fail('Invalid JSON body', 400); }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fail('JSON body must be an object.', 400);
+      resolve(parsed);
+    });
     req.on('error', reject);
   });
+}
+
+// ---------- Request hardening ----------
+const API_PATH_PATTERN = /^(?:[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*)?\/?$/;
+// Vercel rewrites /api/* to the function with the original path in __api_path. Returns false when the value is not a plain path.
+function restoreApiPath(req) {
+  const parsed = new URL(req.url, 'http://localhost');
+  const values = parsed.searchParams.getAll('__api_path');
+  if (!values.length) return true;
+  if (values.length > 1 || values[0].length > 300 || !API_PATH_PATTERN.test(values[0])) return false;
+  parsed.searchParams.delete('__api_path');
+  req.url = `/api/${values[0]}${parsed.search}`;
+  return true;
+}
+function hostOf(value) {
+  try { return new URL(value).host.toLowerCase(); } catch { return null; }
+}
+// Cookie-authenticated browsers always send Origin on non-GET requests; reject any that do not come from this site.
+function crossSiteRequest(req) {
+  const origin = req.headers.origin;
+  if (origin) {
+    const allowed = new Set([String(req.headers.host || '').toLowerCase(), String(req.headers['x-forwarded-host'] || '').split(',')[0].trim().toLowerCase()]);
+    for (const extra of String(process.env.ALLOWED_ORIGINS || '').split(',')) { const host = hostOf(extra.trim()); if (host) allowed.add(host); }
+    const originHost = origin === 'null' ? null : hostOf(origin);
+    return !originHost || !allowed.has(originHost);
+  }
+  const fetchSite = req.headers['sec-fetch-site'];
+  return !!fetchSite && !['same-origin', 'none'].includes(fetchSite);
+}
+const SAFE_SEGMENT = /^[A-Za-z0-9_-]{1,120}$/;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function httpUrlProblem(value) {
+  if (typeof value !== 'string') return 'must be text';
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > 2048) return 'is too long';
+  try { if (!['http:', 'https:'].includes(new URL(trimmed).protocol)) return 'must use HTTP or HTTPS'; } catch { return 'must be a valid URL'; }
+  return null;
+}
+// Generic payload checks applied to every JSON body before route handling.
+function bodyProblem(body, pathname) {
+  const passwordKeys = new Set(['password', 'currentPassword', 'newPassword', 'confirmPassword']);
+  const urlKeys = new Set(['videoUrl', 'resourceUrl', 'contractUrl', 'loom']);
+  const checkValue = (key, value, depth) => {
+    if (depth > 4) return 'Request body is nested too deeply.';
+    if (typeof value === 'string') {
+      if (passwordKeys.has(key) ? value.length > 128 : value.length > 10000) return `${key || 'Value'} is too long.`;
+      if (urlKeys.has(key)) { const problem = httpUrlProblem(value); if (problem) return `${key} ${problem}.`; }
+    } else if (Array.isArray(value)) {
+      if (value.length > 100) return `${key} has too many entries.`;
+      for (const item of value) { const problem = checkValue(key, item, depth + 1); if (problem) return problem; }
+    } else if (value && typeof value === 'object') {
+      for (const [childKey, child] of Object.entries(value)) { const problem = checkValue(childKey, child, depth + 1); if (problem) return problem; }
+    }
+    return null;
+  };
+  for (const [key, value] of Object.entries(body)) { const problem = checkValue(key, value, 0); if (problem) return problem; }
+  for (const key of ['name', 'title']) if (typeof body[key] === 'string' && body[key].length > 200) return `${key} is too long.`;
+  if (body.direction !== undefined && !['up', 'down'].includes(body.direction)) return 'Invalid direction.';
+  const needsEmail = pathname === '/api/agents' || /^\/api\/recruits\/[^/]+\/convert$/.test(pathname);
+  if (needsEmail && body.email !== undefined) {
+    const email = String(body.email).trim();
+    if (email.length > 254 || !EMAIL_PATTERN.test(email)) return 'A valid email address is required.';
+  }
+  return null;
+}
+
+// ---------- Login rate limiting (shared PostgreSQL storage; see db/migrations/001_login_attempts.sql) ----------
+const RATE_WINDOW_MS = 15 * 60 * 1000;
+const RATE_LOCK_MS = 15 * 60 * 1000;
+const RATE_LIMITS = { emailip: 5, email: 15, ip: 30, setup: 5 };
+const DUMMY_CREDENTIAL = hashPassword(crypto.randomBytes(16).toString('hex'));
+let rateLimitWarned = false;
+function clientIp(req) {
+  const forwarded = String(req.headers['x-vercel-forwarded-for'] || req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || (req.socket && req.socket.remoteAddress) || 'unknown';
+}
+function limiterKey(scope, value) { return `${scope}:${crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 32)}`; }
+function loginKeys(req, email) {
+  const ip = clientIp(req);
+  return [limiterKey('emailip', `${email}|${ip}`), limiterKey('email', email), limiterKey('ip', ip)];
+}
+function limiterFailed(error) {
+  if (!rateLimitWarned) {
+    rateLimitWarned = true;
+    console.error(error && error.code === '42P01'
+      ? 'Rate limiting DISABLED: login_attempts table is missing. Apply db/migrations/001_login_attempts.sql.'
+      : `Rate limiting unavailable: ${error && error.message}`);
+  }
+}
+// Returns the seconds until the first active lock expires, or 0 when the request may proceed.
+async function lockedFor(keys) {
+  try {
+    const result = await pool.query('SELECT locked_until FROM login_attempts WHERE key = ANY($1) AND locked_until > $2', [keys, Date.now()]);
+    const until = Math.max(0, ...result.rows.map(row => Number(row.locked_until)));
+    return until ? Math.ceil((until - Date.now()) / 1000) : 0;
+  } catch (error) { limiterFailed(error); return 0; }
+}
+async function recordFailure(keys) {
+  const now = Date.now();
+  for (const key of keys) {
+    const scope = key.split(':')[0];
+    try {
+      await pool.query(`INSERT INTO login_attempts (key, failures, window_start, locked_until) VALUES ($1, 1, $2::bigint, 0)
+        ON CONFLICT (key) DO UPDATE SET
+          failures = CASE WHEN login_attempts.window_start < $2::bigint - $3::bigint THEN 1 ELSE login_attempts.failures + 1 END,
+          window_start = CASE WHEN login_attempts.window_start < $2::bigint - $3::bigint THEN $2::bigint ELSE login_attempts.window_start END,
+          locked_until = CASE WHEN (CASE WHEN login_attempts.window_start < $2::bigint - $3::bigint THEN 1 ELSE login_attempts.failures + 1 END) >= $4::int THEN $2::bigint + $5::bigint ELSE login_attempts.locked_until END`,
+      [key, now, RATE_WINDOW_MS, RATE_LIMITS[scope], RATE_LOCK_MS]);
+    } catch (error) { limiterFailed(error); return; }
+  }
+}
+async function clearFailures(keys) {
+  try { await pool.query('DELETE FROM login_attempts WHERE key = ANY($1)', [keys]); } catch (error) { limiterFailed(error); }
+}
+function safeEqual(a, b) {
+  const hash = value => crypto.createHash('sha256').update(String(value)).digest();
+  return crypto.timingSafeEqual(hash(a), hash(b));
 }
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 function serveStatic(req, res, pathname) {
   const file = pathname === '/' ? 'index.html' : pathname.slice(1);
   const fullPath = path.join(STATIC_ROOT, file);
-  if (!fullPath.startsWith(STATIC_ROOT) || !fs.existsSync(fullPath) || fs.statSync(fullPath).isDirectory()) { res.writeHead(404); res.end('Not found'); return; }
+  if (!fullPath.startsWith(STATIC_ROOT + path.sep) || !fs.existsSync(fullPath) || fs.statSync(fullPath).isDirectory()) { res.writeHead(404); res.end('Not found'); return; }
   const ext = path.extname(fullPath);
   res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
   fs.createReadStream(fullPath).pipe(res);
 }
 
-const server = http.createServer(async (req, res) => {
-  // Vercel rewrites /api/* to /api/index.js?__api_path=*; restore the original path.
-  const rewritten = new URL(req.url, 'http://localhost');
-  const originalApiPath = rewritten.searchParams.get('__api_path');
-  if (originalApiPath !== null) {
-    rewritten.searchParams.delete('__api_path');
-    req.url = `/api/${originalApiPath}${rewritten.search}`;
-  }
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  const pathname = url.pathname;
+async function handleRequest(req, res) {
+  let pathname;
+  try {
+    if (!restoreApiPath(req)) { applySecurityHeaders(res, true); return sendJson(res, 400, { error: 'Invalid request path.' }); }
+    pathname = new URL(req.url, 'http://localhost').pathname;
+  } catch { applySecurityHeaders(res, true); return sendJson(res, 400, { error: 'Invalid request.' }); }
+  applySecurityHeaders(res, pathname.startsWith('/api/'));
   if (!pathname.startsWith('/api/')) return serveStatic(req, res, pathname);
+
+  const stateChanging = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+  if (stateChanging && crossSiteRequest(req)) return sendJson(res, 403, { error: 'Cross-site request blocked.' });
+  if (pathname.slice(5).split('/').some(segment => segment && !SAFE_SEGMENT.test(segment))) return sendJson(res, 400, { error: 'Invalid request path.' });
 
   let body = {};
   if (req.method === 'POST' || req.method === 'PATCH') {
-    try { body = await readBody(req); } catch (error) { return sendJson(res, 400, { error: error.message }); }
+    try { body = await readBody(req); } catch (error) { return sendJson(res, error.status || 400, { error: error.message }); }
+    const problem = bodyProblem(body, pathname);
+    if (problem) return sendJson(res, 400, { error: problem });
   }
-  const session = await getSession(req);
+  let session;
+  try { session = await getSession(req); } catch (error) { console.error('Session lookup failed:', error.code || '', error.message); return sendJson(res, 500, { error: 'Server error.' }); }
+  if (!session && parseCookies(req).sid) res.setHeader('Set-Cookie', expiredSessionCookie(req));
   const requireAuth = () => { if (!session) { sendJson(res, 401, { error: 'Not signed in.' }); return false; } return true; };
   const requireOwner = () => { if (!session || session.account.role !== 'owner') { sendJson(res, 403, { error: 'Owner access required.' }); return false; } return true; };
 
@@ -344,6 +507,15 @@ const server = http.createServer(async (req, res) => {
       const owner = await db.prepare("SELECT * FROM accounts WHERE role = 'owner' LIMIT 1").get();
       if (!owner || !owner.needs_setup) return sendJson(res, 403, { error: 'Admin setup has already been completed.' });
       const email = String(body.email || '').trim().toLowerCase();
+      const setupKeys = [limiterKey('setup', clientIp(req))];
+      const retryAfter = await lockedFor(setupKeys);
+      if (retryAfter) { res.setHeader('Retry-After', String(retryAfter)); return sendJson(res, 429, { error: 'Too many attempts. Try again later.' }); }
+      const expectedToken = process.env.SETUP_TOKEN;
+      if (!expectedToken) return sendJson(res, 403, { error: 'Admin setup is disabled until SETUP_TOKEN is configured on the server.' });
+      if (typeof body.setupToken !== 'string' || !safeEqual(body.setupToken, expectedToken)) {
+        await recordFailure(setupKeys);
+        return sendJson(res, 403, { error: 'Invalid setup token.' });
+      }
       if (email !== owner.email.toLowerCase()) return sendJson(res, 400, { error: 'Email does not match the agency owner account.' });
       const password = String(body.password || '');
       if (password.length < 8) return sendJson(res, 400, { error: 'Password must be at least 8 characters.' });
@@ -356,10 +528,24 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { id: owner.id, name: owner.name, role: owner.role, email: owner.email });
     }
     if (pathname === '/api/login' && req.method === 'POST') {
-      const email = String(body.email || '').trim().toLowerCase();
+      const email = String(body.email || '').trim().toLowerCase().slice(0, 254);
+      const keys = loginKeys(req, email);
+      const retryAfter = await lockedFor(keys);
+      if (retryAfter) {
+        res.setHeader('Retry-After', String(retryAfter));
+        return sendJson(res, 429, { error: `Too many failed sign-in attempts. Try again in ${Math.ceil(retryAfter / 60)} minute(s).` });
+      }
       const account = await db.prepare('SELECT * FROM accounts WHERE lower(email) = ?').get(email);
       if (account && account.needs_setup) return sendJson(res, 403, { error: 'Admin account setup is required before signing in.', needsSetup: true });
-      if (!account || !verifyPassword(String(body.password || ''), account.password_salt, account.password_hash)) return sendJson(res, 401, { error: 'Access denied. Check your email and password.' });
+      const passwordOk = verifyPassword(String(body.password || ''), account ? account.password_salt : DUMMY_CREDENTIAL.salt, account ? account.password_hash : DUMMY_CREDENTIAL.hash);
+      if (!account || !passwordOk) {
+        await recordFailure(keys);
+        return sendJson(res, 401, { error: 'Access denied. Check your email and password.' });
+      }
+      await clearFailures(keys.slice(0, 2));
+      const previousToken = parseCookies(req).sid;
+      if (previousToken) await db.prepare('DELETE FROM sessions WHERE token = ?').run(previousToken);
+      await db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
       const token = await createSession(account.id);
       res.setHeader('Set-Cookie', sessionCookie(token, req));
       return sendJson(res, 200, { id: account.id, name: account.name, role: account.role, email: account.email });
@@ -735,7 +921,8 @@ const server = http.createServer(async (req, res) => {
       if (!agentRow) return sendJson(res, 404, { error: 'Agent not found.' });
       const tempPassword = genTempPassword();
       const { salt, hash } = hashPassword(tempPassword);
-      await db.prepare('UPDATE accounts SET password_hash = ?, password_salt = ? WHERE id = ?').run(hash, salt, agentRow.account_id);
+      await db.prepare('UPDATE accounts SET password_hash = ?, password_salt = ?, must_change_password = 1 WHERE id = ?').run(hash, salt, agentRow.account_id);
+      await db.prepare('DELETE FROM sessions WHERE account_id = ?').run(agentRow.account_id);
       return sendJson(res, 200, { tempPassword });
     }
     if (pathname === '/api/account/password' && req.method === 'POST') {
@@ -745,6 +932,7 @@ const server = http.createServer(async (req, res) => {
       if (!session.account.must_change_password && !verifyPassword(currentPassword, session.account.password_salt, session.account.password_hash)) return sendJson(res, 400, { error: 'Current password is incorrect.' });
       if (newPassword.length < 8) return sendJson(res, 400, { error: 'New password must be at least 8 characters.' });
       if (newPassword !== String(body.confirmPassword || '')) return sendJson(res, 400, { error: 'New passwords do not match.' });
+      if (verifyPassword(newPassword, session.account.password_salt, session.account.password_hash)) return sendJson(res, 400, { error: 'New password must be different from your current password.' });
       const { salt, hash } = hashPassword(newPassword);
       await db.prepare('UPDATE accounts SET password_hash = ?, password_salt = ?, must_change_password = 0 WHERE id = ?').run(hash, salt, session.account.id);
       await db.prepare('DELETE FROM sessions WHERE account_id = ? AND token != ?').run(session.account.id, session.token);
@@ -864,9 +1052,17 @@ const server = http.createServer(async (req, res) => {
 
     return sendJson(res, 404, { error: 'Not found.' });
   } catch (error) {
-    console.error(error);
+    console.error('API error:', error.code || '', error.message);
     return sendJson(res, 500, { error: 'Server error.' });
   }
+}
+
+const server = http.createServer((req, res) => {
+  handleRequest(req, res).catch(error => {
+    console.error('Unhandled request error:', error.code || '', error.message);
+    if (!res.headersSent) sendJson(res, 500, { error: 'Server error.' });
+    else res.end();
+  });
 });
 
 if (listen) server.listen(PORT, () => console.log(`The Agent Forge running on http://localhost:${PORT}`));
